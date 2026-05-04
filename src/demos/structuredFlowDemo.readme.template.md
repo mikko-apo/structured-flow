@@ -16,6 +16,7 @@ structured-flow helps you structure logic and visualize execution.
 * [branch() examples](#branch-examples)
   * [One Of Three Branches](#one-of-three-branches)
   * [Two Of Three Branches](#two-of-three-branches)
+  * [Nested Branch](#nested-branch)
   * [Skipped Branch](#skipped-branch)
 <!-- TOC -->
 
@@ -105,6 +106,14 @@ This run selects two branches from three branches and records each branch result
 {{BRANCH_TWO_OF_THREE_CODE_BLOCK}}
 
 {{BRANCH_TWO_OF_THREE_DEMO_SECTION}}
+
+## Nested Branch
+
+This run selects `B` from the first branch step, then selects `D` from the nested branch inside `B`.
+
+{{NESTED_BRANCH_CODE_BLOCK}}
+
+{{NESTED_BRANCH_DEMO_SECTION}}
 
 ## Skipped Branch
 

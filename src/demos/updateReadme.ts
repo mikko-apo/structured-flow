@@ -7,6 +7,7 @@ import { renderProcessAsMermaidGraph } from '../mermaid'
 const demoSourceMarkerPrefix = 'structured-process-demo-example'
 const branchOneSourceMarkerPrefix = 'branch-one-of-three-example'
 const branchTwoSourceMarkerPrefix = 'branch-two-of-three-example'
+const nestedBranchSourceMarkerPrefix = 'nested-branch-example'
 const branchSkipSourceMarkerPrefix = 'branch-skip-example'
 
 /* structured-process-demo-example:start */
@@ -122,6 +123,43 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
   })
   .build()
 /* branch-two-of-three-example:end */
+
+/* nested-branch-example:start */
+type FirstBranch = 'A' | 'B'
+type SecondBranch = 'C' | 'D'
+
+const branchAFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .step('A-1', 'Handle A', () => ({
+    visitedA: true,
+  }))
+  .build()
+
+const branchCFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .step('C-1', 'Handle C', () => ({
+    visitedC: true,
+  }))
+  .build()
+
+const branchDFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .step('D-1', 'Handle D', () => ({
+    visitedD: true,
+  }))
+  .build()
+
+const branchBFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .branch('B-ROUTE', ({ secondBranch }) => secondBranch, {
+    C: branchCFlow,
+    D: branchDFlow,
+  })
+  .build()
+
+const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .branch('ROOT-ROUTE', ({ firstBranch }) => firstBranch, {
+    A: branchAFlow,
+    B: branchBFlow,
+  })
+  .build()
+/* nested-branch-example:end */
 
 /* branch-skip-example:start */
 const approveFlow = createSync<{ shouldRunChecks: boolean }>()
@@ -261,7 +299,23 @@ function renderOutcomeBadge(result: Pick<FlowResult<any, any>, 'ok' | 'stepResul
   return renderStatusBadge(badgeType).replace(`>${escapeHtml(badgeType)}<`, `>${escapeHtml(label)}<`)
 }
 
-function renderBranchDetails(branches?: BranchRunResult[]): string {
+function renderBranchStepDetails(stepResults: BranchRunResult['stepResults'], depth: number): string {
+  if (stepResults.length === 0) {
+    return '<div style="margin-top:4px;color:#64748b;">No branch steps recorded.</div>'
+  }
+
+  return stepResults
+    .map(
+      (stepResult) => `<div style="margin-top:4px;padding-left:${depth * 12}px;">
+<div>${escapeHtml(stepResult.id)} ${renderStatusBadge(stepResult.result)}</div>
+${stepResult.info == null ? '' : `<div style="margin-top:2px;color:#475569;">${escapeHtml(String(stepResult.info))}</div>`}
+${renderBranchDetails(stepResult.branches, depth + 1)}
+</div>`
+    )
+    .join('')
+}
+
+function renderBranchDetails(branches?: BranchRunResult[], depth = 0): string {
   if (branches == null || branches.length === 0) {
     return ''
   }
@@ -269,19 +323,13 @@ function renderBranchDetails(branches?: BranchRunResult[]): string {
   return branches
     .map((branch) => {
       const descriptionById = new Map(branch.steps.map((step) => [step.id, step.description]))
-      const stepHtml =
-        branch.stepResults.length === 0
-          ? '<div style="margin-top:4px;color:#64748b;">No branch steps recorded.</div>'
-          : branch.stepResults
-              .map(
-                (stepResult) => `<div style="margin-top:4px;padding-left:12px;">
-<div>${escapeHtml(stepResult.id)}${descriptionById.get(stepResult.id) == null ? '' : `: ${escapeHtml(descriptionById.get(stepResult.id) ?? '')}`} ${renderStatusBadge(stepResult.result)}</div>
-${stepResult.info == null ? '' : `<div style="margin-top:2px;color:#475569;">${escapeHtml(String(stepResult.info))}</div>`}
-</div>`
-              )
-              .join('')
+      const stepResultsWithDescriptions = branch.stepResults.map((stepResult) => ({
+        ...stepResult,
+        id: descriptionById.get(stepResult.id) == null ? stepResult.id : `${stepResult.id}: ${descriptionById.get(stepResult.id) ?? ''}`,
+      }))
+      const stepHtml = renderBranchStepDetails(stepResultsWithDescriptions, depth + 1)
 
-      return `<div style="margin-bottom:10px;">
+      return `<div style="margin-bottom:10px;padding-left:${depth * 12}px;">
 <div><strong>${escapeHtml(branch.key)}</strong> ${renderStatusBadge(branch.result)}</div>
 <div style="margin-top:2px;color:#475569;">Ctx: ${escapeHtml(JSON.stringify(branch.ctx))}</div>
 ${stepHtml}
@@ -465,6 +513,14 @@ async function renderStructuredProcessExampleMarkdown<InitialCtx extends object>
     flow: twoOfThreeBranchFlow,
     demoPlaceholder: 'BRANCH_TWO_OF_THREE_DEMO_SECTION',
     demoInit: { amount: 8, checks: ['tax', 'fraud'] },
+  })
+
+  markdown = await renderGeneratedExample(markdown, {
+    codePlaceholder: 'NESTED_BRANCH_CODE_BLOCK',
+    codeMarkerPrefix: nestedBranchSourceMarkerPrefix,
+    flow: nestedBranchFlow,
+    demoPlaceholder: 'NESTED_BRANCH_DEMO_SECTION',
+    demoInit: { firstBranch: 'B', secondBranch: 'D' },
   })
 
   markdown = await renderGeneratedExample(markdown, {

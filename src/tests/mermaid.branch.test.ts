@@ -80,4 +80,50 @@ describe('renderProcessAsMermaidGraph branch rendering', () => {
     expect(graph).toContain('branch_0_2_step_0["POLICY-1: Check policy\n[skip]"]')
     expect(graph).toContain('branch_0_result --> done')
   })
+
+  it('renders nested branch graphs inside a selected branch', () => {
+    const branchAFlow = createSync<{ firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }>()
+      .step('A-1', 'Handle A', () => ({
+        visitedA: true,
+      }))
+      .build()
+
+    const branchCFlow = createSync<{ firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }>()
+      .step('C-1', 'Handle C', () => ({
+        visitedC: true,
+      }))
+      .build()
+
+    const branchDFlow = createSync<{ firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }>()
+      .step('D-1', 'Handle D', () => ({
+        visitedD: true,
+      }))
+      .build()
+
+    const branchBFlow = createSync<{ firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }>()
+      .branch('B-ROUTE', ({ secondBranch }) => secondBranch, {
+        C: branchCFlow,
+        D: branchDFlow,
+      })
+      .build()
+
+    const flow = createSync<{ firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }>()
+      .branch('ROOT-ROUTE', ({ firstBranch }) => firstBranch, {
+        A: branchAFlow,
+        B: branchBFlow,
+      })
+      .build()
+
+    const result = flow.run({ firstBranch: 'B', secondBranch: 'D' })
+    const graph = renderProcessAsMermaidGraph(result)
+
+    expect(graph).toContain('step_0["ROOT-ROUTE:\nbranches: B"]')
+    expect(graph).toContain('branch_0_0_start["Branch: B"]')
+    expect(graph).toContain('branch_0_0_step_0["B-ROUTE:\nbranches: D"]')
+    expect(graph).toContain('branch_0_0_step_0_branch_0_start["Branch: D"]')
+    expect(graph).toContain('branch_0_0_step_0_branch_0_step_0["D-1: Handle D\n[ok]"]')
+    expect(graph).toContain('branch_0_0_step_0_branch_1_start["Branch: C\n[skip]"]')
+    expect(graph).toContain('branch_0_0_step_0_branch_result["B-ROUTE:\nResult: ok"]')
+    expect(graph).toContain('branch_0_result["ROOT-ROUTE:\nResult: ok"]')
+  })
 })

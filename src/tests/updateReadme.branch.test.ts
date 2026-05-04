@@ -44,6 +44,16 @@ describe('updateReadme branch rendering', () => {
       '<!-- structured-process-demo:branch-two-of-three-demo:html-table:start -->',
       '<!-- structured-process-demo:branch-two-of-three-demo:html-table:end -->'
     )
+    const nestedBranchMermaid = sliceBetween(
+      markdown,
+      '<!-- structured-process-demo:nested-branch-demo:mermaid:start -->',
+      '<!-- structured-process-demo:nested-branch-demo:mermaid:end -->'
+    )
+    const nestedBranchTable = sliceBetween(
+      markdown,
+      '<!-- structured-process-demo:nested-branch-demo:html-table:start -->',
+      '<!-- structured-process-demo:nested-branch-demo:html-table:end -->'
+    )
 
     expect(branchMermaid).toContain('ROUTE:')
     expect(branchMermaid).toContain('branches: expense')
@@ -64,5 +74,15 @@ describe('updateReadme branch rendering', () => {
     expect(branchTable).toContain('Ctx:')
     expect(branchTable).toContain('taxChecked')
     expect(branchTable).toContain('Fraud review failed.')
+    expect(nestedBranchMermaid).toContain('ROOT-ROUTE:')
+    expect(nestedBranchMermaid).toContain('branches: B')
+    expect(nestedBranchMermaid).toContain('B-ROUTE:')
+    expect(nestedBranchMermaid).toContain('branches: D')
+    expect(nestedBranchMermaid).toContain('Branch: D')
+    expect(nestedBranchMermaid).toContain('D-1: Handle D')
+    expect(nestedBranchTable).toContain('ROOT-ROUTE')
+    expect(nestedBranchTable).toContain('B-ROUTE')
+    expect(nestedBranchTable).toContain('D-1: Handle D')
+    expect(nestedBranchTable).toContain('visitedD')
   })
 })

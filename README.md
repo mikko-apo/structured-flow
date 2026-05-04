@@ -16,6 +16,7 @@ structured-flow helps you structure logic and visualize execution.
 * [branch() examples](#branch-examples)
   * [One Of Three Branches](#one-of-three-branches)
   * [Two Of Three Branches](#two-of-three-branches)
+  * [Nested Branch](#nested-branch)
   * [Skipped Branch](#skipped-branch)
 <!-- TOC -->
 
@@ -781,25 +782,28 @@ Result: ok"]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Branch</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;">
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>expense</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;,&quot;normalizedAmount&quot;:-24}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>EX-1: Handle expense <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
 
+
 </div>
-</div><div style="margin-bottom:10px;">
+</div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>income</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>IN-1: Handle income <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 
+
 </div>
-</div><div style="margin-bottom:10px;">
+</div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>transfer</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>TR-1: Handle transfer <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 </div>
 </div></td>
@@ -1017,31 +1021,300 @@ Fraud review failed."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Branch</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;">
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>tax</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;],&quot;taxChecked&quot;:true}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>TAX-1: Check taxes <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
 
+
 </div>
-</div><div style="margin-bottom:10px;">
+</div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>fraud</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;]}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>FRAUD-1: Check fraud <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
 <div style="margin-top:2px;color:#475569;">Fraud review failed.</div>
+
 </div>
-</div><div style="margin-bottom:10px;">
+</div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>policy</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;]}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>POLICY-1: Check policy <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 </div>
 </div></td>
 </tr></tbody>
 </table>
 <!-- structured-process-demo:branch-two-of-three-demo:html-table:end --></div></div>
+
+## Nested Branch
+
+This run selects `B` from the first branch step, then selects `D` from the nested branch inside `B`.
+
+```ts
+type FirstBranch = 'A' | 'B'
+type SecondBranch = 'C' | 'D'
+
+const branchAFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .step('A-1', 'Handle A', () => ({
+    visitedA: true,
+  }))
+  .build()
+
+const branchCFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .step('C-1', 'Handle C', () => ({
+    visitedC: true,
+  }))
+  .build()
+
+const branchDFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .step('D-1', 'Handle D', () => ({
+    visitedD: true,
+  }))
+  .build()
+
+const branchBFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .branch('B-ROUTE', ({ secondBranch }) => secondBranch, {
+    C: branchCFlow,
+    D: branchDFlow,
+  })
+  .build()
+
+const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .branch('ROOT-ROUTE', ({ firstBranch }) => firstBranch, {
+    A: branchAFlow,
+    B: branchBFlow,
+  })
+  .build()
+```
+
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
+
+<p><strong>Init JSON</strong></p>
+<!-- structured-process-demo:nested-branch-demo-init:json:start -->
+<pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
+<code>{
+  &quot;firstBranch&quot;: &quot;B&quot;,
+  &quot;secondBranch&quot;: &quot;D&quot;
+}</code>
+</pre>
+<!-- structured-process-demo:nested-branch-demo-init:json:end -->
+
+<p><strong>Result JSON</strong></p>
+<!-- structured-process-demo:nested-branch-demo-result:json:start -->
+<pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
+<code>{
+  &quot;ok&quot;: true,
+  &quot;failedStepIds&quot;: [],
+  &quot;stepResults&quot;: [
+    {
+      &quot;id&quot;: &quot;ROOT-ROUTE&quot;,
+      &quot;result&quot;: &quot;ok&quot;,
+      &quot;branches&quot;: [
+        {
+          &quot;key&quot;: &quot;B&quot;,
+          &quot;result&quot;: &quot;ok&quot;,
+          &quot;ctx&quot;: {
+            &quot;firstBranch&quot;: &quot;B&quot;,
+            &quot;secondBranch&quot;: &quot;D&quot;
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;B-ROUTE&quot;,
+              &quot;description&quot;: &quot;Branch&quot;
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;B-ROUTE&quot;,
+              &quot;result&quot;: &quot;ok&quot;,
+              &quot;branches&quot;: [
+                {
+                  &quot;key&quot;: &quot;D&quot;,
+                  &quot;result&quot;: &quot;ok&quot;,
+                  &quot;ctx&quot;: {
+                    &quot;firstBranch&quot;: &quot;B&quot;,
+                    &quot;secondBranch&quot;: &quot;D&quot;,
+                    &quot;visitedD&quot;: true
+                  },
+                  &quot;steps&quot;: [
+                    {
+                      &quot;id&quot;: &quot;D-1&quot;,
+                      &quot;description&quot;: &quot;Handle D&quot;
+                    }
+                  ],
+                  &quot;stepResults&quot;: [
+                    {
+                      &quot;id&quot;: &quot;D-1&quot;,
+                      &quot;result&quot;: &quot;ok&quot;
+                    }
+                  ]
+                },
+                {
+                  &quot;key&quot;: &quot;C&quot;,
+                  &quot;result&quot;: &quot;skip&quot;,
+                  &quot;ctx&quot;: {
+                    &quot;firstBranch&quot;: &quot;B&quot;,
+                    &quot;secondBranch&quot;: &quot;D&quot;
+                  },
+                  &quot;steps&quot;: [
+                    {
+                      &quot;id&quot;: &quot;C-1&quot;,
+                      &quot;description&quot;: &quot;Handle C&quot;
+                    }
+                  ],
+                  &quot;stepResults&quot;: [
+                    {
+                      &quot;id&quot;: &quot;C-1&quot;,
+                      &quot;result&quot;: &quot;skip&quot;
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          &quot;key&quot;: &quot;A&quot;,
+          &quot;result&quot;: &quot;skip&quot;,
+          &quot;ctx&quot;: {
+            &quot;firstBranch&quot;: &quot;B&quot;,
+            &quot;secondBranch&quot;: &quot;D&quot;
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;A-1&quot;,
+              &quot;description&quot;: &quot;Handle A&quot;
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;A-1&quot;,
+              &quot;result&quot;: &quot;skip&quot;
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  &quot;ctx&quot;: {
+    &quot;firstBranch&quot;: &quot;B&quot;,
+    &quot;secondBranch&quot;: &quot;D&quot;
+  }
+}</code>
+</pre>
+<!-- structured-process-demo:nested-branch-demo-result:json:end -->
+
+</div></div><div><div>
+
+<!-- structured-process-demo:nested-branch-demo:mermaid:start -->
+```mermaid
+flowchart TD
+  start([Start])
+  step_0["ROOT-ROUTE:
+branches: B"]
+  branch_0_result["ROOT-ROUTE:
+Result: ok"]
+  class branch_0_result success
+  branch_0_0_start["Branch: B"]
+  step_0 --> branch_0_0_start
+  branch_0_0_step_0["B-ROUTE:
+branches: D"]
+  branch_0_0_start --> branch_0_0_step_0
+  branch_0_0_step_0_branch_result["B-ROUTE:
+Result: ok"]
+  class branch_0_0_step_0_branch_result success
+  branch_0_0_step_0_branch_0_start["Branch: D"]
+  branch_0_0_step_0 --> branch_0_0_step_0_branch_0_start
+  branch_0_0_step_0_branch_0_step_0["D-1: Handle D
+[ok]"]
+  branch_0_0_step_0_branch_0_start --> branch_0_0_step_0_branch_0_step_0
+  branch_0_0_step_0_branch_0_step_0 --> branch_0_0_step_0_branch_result
+  class branch_0_0_step_0_branch_0_step_0 success
+  class branch_0_0_step_0_branch_0_start executed
+  branch_0_0_step_0_branch_1_start["Branch: C
+[skip]"]
+  branch_0_0_step_0 --> branch_0_0_step_0_branch_1_start
+  branch_0_0_step_0_branch_1_step_0["C-1: Handle C
+[skip]"]
+  branch_0_0_step_0_branch_1_start --> branch_0_0_step_0_branch_1_step_0
+  branch_0_0_step_0_branch_1_step_0 --> branch_0_0_step_0_branch_result
+  class branch_0_0_step_0_branch_1_step_0 neutral
+  class branch_0_0_step_0_branch_1_start neutral
+  branch_0_0_step_0_branch_result --> branch_0_result
+  class branch_0_0_step_0 success
+  class branch_0_0_start executed
+  branch_0_1_start["Branch: A
+[skip]"]
+  step_0 --> branch_0_1_start
+  branch_0_1_step_0["A-1: Handle A
+[skip]"]
+  branch_0_1_start --> branch_0_1_step_0
+  branch_0_1_step_0 --> branch_0_result
+  class branch_0_1_step_0 neutral
+  class branch_0_1_start neutral
+  branch_0_result --> done
+  done([Done])
+  start --> step_0
+  classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
+  classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px
+  classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
+  classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
+  classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  class step_0 success
+  class start executed
+  class done success
+```
+<!-- structured-process-demo:nested-branch-demo:mermaid:end -->
+
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span><br><strong>Failed steps:</strong> none</p>
+<!-- structured-process-demo:nested-branch-demo:html-table:start -->
+<table style="width:100%;border-collapse:collapse;font-size:14px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<tbody><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">ROOT-ROUTE</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Branch</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>B</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>B-ROUTE: Branch <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+
+<div style="margin-bottom:10px;padding-left:24px;">
+<div><strong>D</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;,&quot;visitedD&quot;:true}</div>
+<div style="margin-top:4px;padding-left:36px;">
+<div>D-1: Handle D <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+
+
+</div>
+</div><div style="margin-bottom:10px;padding-left:24px;">
+<div><strong>C</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;}</div>
+<div style="margin-top:4px;padding-left:36px;">
+<div>C-1: Handle C <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+
+</div>
+</div>
+</div>
+</div><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>A</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>A-1: Handle A <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+
+</div>
+</div></td>
+</tr></tbody>
+</table>
+<!-- structured-process-demo:nested-branch-demo:html-table:end --></div></div>
 
 ## Skipped Branch
 
@@ -1225,25 +1498,28 @@ Result: skip"]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Branch</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;">
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>approve</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;shouldRunChecks&quot;:false}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>APP-1: Approve <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 
+
 </div>
-</div><div style="margin-bottom:10px;">
+</div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>reject</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;shouldRunChecks&quot;:false}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>REJ-1: Reject <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 
+
 </div>
-</div><div style="margin-bottom:10px;">
+</div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>review</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;shouldRunChecks&quot;:false}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>REV-1: Review <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 </div>
 </div></td>
