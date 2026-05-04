@@ -3,6 +3,22 @@
 Need to manage hundreds of business logic validation rules in code? Tired of scattered docs and complex code?
 structured-flow helps you structure logic and visualize execution.
 
+<!-- TOC -->
+* [structured-flow](#structured-flow)
+* [Structured Flow API Example](#structured-flow-api-example)
+  * [Flow And Step Execution](#flow-and-step-execution)
+  * [Flow](#flow)
+  * [Static Graph](#static-graph)
+  * [Passing Demo](#passing-demo)
+  * [Failing Demo](#failing-demo)
+  * [Stop Demo](#stop-demo)
+  * [Exception Demo](#exception-demo)
+* [branch() examples](#branch-examples)
+  * [One Of Three Branches](#one-of-three-branches)
+  * [Two Of Three Branches](#two-of-three-branches)
+  * [Skipped Branch](#skipped-branch)
+<!-- TOC -->
+
 # Structured Flow API Example
 
 This example shows the intended flow of the sequence API and two concrete runs of the same sequence.
