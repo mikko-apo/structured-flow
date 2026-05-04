@@ -50,6 +50,16 @@ describe('FlowBuilder.branch', () => {
             steps: [{ id: 'APP-1', description: 'Approve request' }],
             stepResults: [{ id: 'APP-1', result: 'ok' }],
           },
+          {
+            key: 'rejected',
+            result: 'skip',
+            ctx: {
+              amount: 4,
+              route: 'approved',
+            },
+            steps: [{ id: 'REJ-1', description: 'Reject request' }],
+            stepResults: [{ id: 'REJ-1', result: 'skip' }],
+          },
         ],
       },
       {
@@ -78,6 +88,17 @@ describe('FlowBuilder.branch', () => {
       {
         id: 'BR-STOP',
         result: 'stop',
+        branches: [
+          {
+            key: 'active',
+            result: 'skip',
+            ctx: {
+              shouldStop: true,
+            },
+            steps: [{ id: 'ACTIVE-1', description: 'Should not run' }],
+            stepResults: [{ id: 'ACTIVE-1', result: 'skip' }],
+          },
+        ],
       },
       {
         id: 'AFTER',
@@ -132,10 +153,15 @@ describe('FlowBuilder.branch', () => {
       )
       .build()
 
+    const policyFlow = createAsync<{ mode: 'all'; amount: number }>()
+      .step('POLICY-1', 'Check policy', async () => ({ policyChecked: true }))
+      .build()
+
     const flow = createAsync<{ mode: 'all'; amount: number }>()
       .branch('BR-MULTI', ({ mode }) => (mode === 'all' ? (['audit', 'rules'] as const) : 'ok'), {
         audit: auditFlow,
         rules: rulesFlow,
+        policy: policyFlow,
       })
       .step('AFTER', 'Parent flow continues after branch errors', async () => ({
         reviewed: true,
@@ -181,6 +207,16 @@ describe('FlowBuilder.branch', () => {
                 info: 'Rules rejected the request.',
               },
             ],
+          },
+          {
+            key: 'policy',
+            result: 'skip',
+            ctx: {
+              mode: 'all',
+              amount: 8,
+            },
+            steps: [{ id: 'POLICY-1', description: 'Check policy' }],
+            stepResults: [{ id: 'POLICY-1', result: 'skip' }],
           },
         ],
       },
@@ -345,6 +381,15 @@ describe('FlowBuilder.branch', () => {
             },
             steps: [],
             stepResults: [],
+          },
+          {
+            key: 'normal',
+            result: 'skip',
+            ctx: {
+              route: 'empty',
+            },
+            steps: [{ id: 'NORMAL-1', description: 'Normal path' }],
+            stepResults: [{ id: 'NORMAL-1', result: 'skip' }],
           },
         ],
       },

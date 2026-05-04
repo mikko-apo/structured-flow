@@ -40,7 +40,7 @@ function statusToClassName(result: StepStatus): string {
 }
 
 function renderStepLabel(step: MermaidStep, stepResult?: MermaidStepResult): string {
-  const branchKeys = stepResult?.branches?.map((branch) => String(branch.key))
+  const branchKeys = stepResult?.branches?.filter((branch) => branch.result !== 'skip').map((branch) => String(branch.key))
   const isBranchStep = step.description === 'Branch'
 
   if (branchKeys != null && branchKeys.length > 0) {
@@ -81,8 +81,10 @@ function renderBranchGraphLines(
     const branchPrefix = `branch_${stepIndex}_${branchIndex}`
     const branchStartNodeId = `${branchPrefix}_start`
     const branchResultById = new Map(branch.stepResults.map((childStepResult) => [childStepResult.id, childStepResult]))
+    const branchStartLabel =
+      branch.result === 'skip' ? `Branch: ${String(branch.key)}\n[skip]` : `Branch: ${String(branch.key)}`
 
-    lines.push(`  ${branchStartNodeId}([Branch: ${escapeMermaidLabel(String(branch.key))}])`)
+    lines.push(`  ${branchStartNodeId}["${escapeMermaidLabel(branchStartLabel)}"]`)
     lines.push(`  ${parentNodeId} --> ${branchStartNodeId}`)
 
     if (branch.steps.length === 0) {
@@ -106,7 +108,7 @@ function renderBranchGraphLines(
       }
     }
 
-    lines.push(`  class ${branchStartNodeId} executed`)
+    lines.push(`  class ${branchStartNodeId} ${branch.result === 'skip' ? 'neutral' : 'executed'}`)
   }
 
   lines.push(`  ${branchResultNodeId} --> ${nextNodeId}`)

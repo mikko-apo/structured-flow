@@ -669,6 +669,46 @@ const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
               &quot;result&quot;: &quot;ok&quot;
             }
           ]
+        },
+        {
+          &quot;key&quot;: &quot;income&quot;,
+          &quot;result&quot;: &quot;skip&quot;,
+          &quot;ctx&quot;: {
+            &quot;amount&quot;: 24,
+            &quot;kind&quot;: &quot;expense&quot;
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;IN-1&quot;,
+              &quot;description&quot;: &quot;Handle income&quot;
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;IN-1&quot;,
+              &quot;result&quot;: &quot;skip&quot;
+            }
+          ]
+        },
+        {
+          &quot;key&quot;: &quot;transfer&quot;,
+          &quot;result&quot;: &quot;skip&quot;,
+          &quot;ctx&quot;: {
+            &quot;amount&quot;: 24,
+            &quot;kind&quot;: &quot;expense&quot;
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;TR-1&quot;,
+              &quot;description&quot;: &quot;Handle transfer&quot;
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;TR-1&quot;,
+              &quot;result&quot;: &quot;skip&quot;
+            }
+          ]
         }
       ]
     }
@@ -692,7 +732,7 @@ branches: expense"]
   branch_0_result["ROUTE:
 Result: ok"]
   class branch_0_result success
-  branch_0_0_start([Branch: expense])
+  branch_0_0_start["Branch: expense"]
   step_0 --> branch_0_0_start
   branch_0_0_step_0["EX-1: Handle expense
 [ok]"]
@@ -700,6 +740,24 @@ Result: ok"]
   branch_0_0_step_0 --> branch_0_result
   class branch_0_0_step_0 success
   class branch_0_0_start executed
+  branch_0_1_start["Branch: income
+[skip]"]
+  step_0 --> branch_0_1_start
+  branch_0_1_step_0["IN-1: Handle income
+[skip]"]
+  branch_0_1_start --> branch_0_1_step_0
+  branch_0_1_step_0 --> branch_0_result
+  class branch_0_1_step_0 neutral
+  class branch_0_1_start neutral
+  branch_0_2_start["Branch: transfer
+[skip]"]
+  step_0 --> branch_0_2_start
+  branch_0_2_step_0["TR-1: Handle transfer
+[skip]"]
+  branch_0_2_start --> branch_0_2_step_0
+  branch_0_2_step_0 --> branch_0_result
+  class branch_0_2_step_0 neutral
+  class branch_0_2_start neutral
   branch_0_result --> done
   done([Done])
   start --> step_0
@@ -728,6 +786,20 @@ Result: ok"]
 <div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;,&quot;normalizedAmount&quot;:-24}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>EX-1: Handle expense <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+
+</div>
+</div><div style="margin-bottom:10px;">
+<div><strong>income</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>IN-1: Handle income <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+</div>
+</div><div style="margin-bottom:10px;">
+<div><strong>transfer</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>TR-1: Handle transfer <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
 
 </div>
 </div></td>
@@ -847,6 +919,29 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
               &quot;info&quot;: &quot;Fraud review failed.&quot;
             }
           ]
+        },
+        {
+          &quot;key&quot;: &quot;policy&quot;,
+          &quot;result&quot;: &quot;skip&quot;,
+          &quot;ctx&quot;: {
+            &quot;amount&quot;: 8,
+            &quot;checks&quot;: [
+              &quot;tax&quot;,
+              &quot;fraud&quot;
+            ]
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;POLICY-1&quot;,
+              &quot;description&quot;: &quot;Check policy&quot;
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;POLICY-1&quot;,
+              &quot;result&quot;: &quot;skip&quot;
+            }
+          ]
         }
       ]
     }
@@ -873,7 +968,7 @@ branches: tax, fraud"]
   branch_0_result["CHECKS:
 Result: error"]
   class branch_0_result failure
-  branch_0_0_start([Branch: tax])
+  branch_0_0_start["Branch: tax"]
   step_0 --> branch_0_0_start
   branch_0_0_step_0["TAX-1: Check taxes
 [ok]"]
@@ -881,7 +976,7 @@ Result: error"]
   branch_0_0_step_0 --> branch_0_result
   class branch_0_0_step_0 success
   class branch_0_0_start executed
-  branch_0_1_start([Branch: fraud])
+  branch_0_1_start["Branch: fraud"]
   step_0 --> branch_0_1_start
   branch_0_1_step_0["FRAUD-1: Check fraud
 [error]
@@ -890,6 +985,15 @@ Fraud review failed."]
   branch_0_1_step_0 --> branch_0_result
   class branch_0_1_step_0 failure
   class branch_0_1_start executed
+  branch_0_2_start["Branch: policy
+[skip]"]
+  step_0 --> branch_0_2_start
+  branch_0_2_step_0["POLICY-1: Check policy
+[skip]"]
+  branch_0_2_start --> branch_0_2_step_0
+  branch_0_2_step_0 --> branch_0_result
+  class branch_0_2_step_0 neutral
+  class branch_0_2_start neutral
   branch_0_result --> done
   done([Completed with Errors])
   start --> step_0
@@ -926,6 +1030,13 @@ Fraud review failed."]
 <div style="margin-top:4px;padding-left:12px;">
 <div>FRAUD-1: Check fraud <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
 <div style="margin-top:2px;color:#475569;">Fraud review failed.</div>
+</div>
+</div><div style="margin-bottom:10px;">
+<div><strong>policy</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;]}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>POLICY-1: Check policy <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 </div>
 </div></td>
 </tr></tbody>
@@ -984,7 +1095,66 @@ const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
   &quot;stepResults&quot;: [
     {
       &quot;id&quot;: &quot;OPTIONAL-CHECKS&quot;,
-      &quot;result&quot;: &quot;skip&quot;
+      &quot;result&quot;: &quot;skip&quot;,
+      &quot;branches&quot;: [
+        {
+          &quot;key&quot;: &quot;approve&quot;,
+          &quot;result&quot;: &quot;skip&quot;,
+          &quot;ctx&quot;: {
+            &quot;shouldRunChecks&quot;: false
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;APP-1&quot;,
+              &quot;description&quot;: &quot;Approve&quot;
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;APP-1&quot;,
+              &quot;result&quot;: &quot;skip&quot;
+            }
+          ]
+        },
+        {
+          &quot;key&quot;: &quot;reject&quot;,
+          &quot;result&quot;: &quot;skip&quot;,
+          &quot;ctx&quot;: {
+            &quot;shouldRunChecks&quot;: false
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;REJ-1&quot;,
+              &quot;description&quot;: &quot;Reject&quot;
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;REJ-1&quot;,
+              &quot;result&quot;: &quot;skip&quot;
+            }
+          ]
+        },
+        {
+          &quot;key&quot;: &quot;review&quot;,
+          &quot;result&quot;: &quot;skip&quot;,
+          &quot;ctx&quot;: {
+            &quot;shouldRunChecks&quot;: false
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;REV-1&quot;,
+              &quot;description&quot;: &quot;Review&quot;
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;REV-1&quot;,
+              &quot;result&quot;: &quot;skip&quot;
+            }
+          ]
+        }
+      ]
     }
   ],
   &quot;ctx&quot;: {
@@ -1002,7 +1172,37 @@ flowchart TD
   start([Start])
   step_0["OPTIONAL-CHECKS: branch()
 [skip]"]
-  step_0 --> done
+  branch_0_result["OPTIONAL-CHECKS:
+Result: skip"]
+  class branch_0_result neutral
+  branch_0_0_start["Branch: approve
+[skip]"]
+  step_0 --> branch_0_0_start
+  branch_0_0_step_0["APP-1: Approve
+[skip]"]
+  branch_0_0_start --> branch_0_0_step_0
+  branch_0_0_step_0 --> branch_0_result
+  class branch_0_0_step_0 neutral
+  class branch_0_0_start neutral
+  branch_0_1_start["Branch: reject
+[skip]"]
+  step_0 --> branch_0_1_start
+  branch_0_1_step_0["REJ-1: Reject
+[skip]"]
+  branch_0_1_start --> branch_0_1_step_0
+  branch_0_1_step_0 --> branch_0_result
+  class branch_0_1_step_0 neutral
+  class branch_0_1_start neutral
+  branch_0_2_start["Branch: review
+[skip]"]
+  step_0 --> branch_0_2_start
+  branch_0_2_step_0["REV-1: Review
+[skip]"]
+  branch_0_2_start --> branch_0_2_step_0
+  branch_0_2_step_0 --> branch_0_result
+  class branch_0_2_step_0 neutral
+  class branch_0_2_start neutral
+  branch_0_result --> done
   done([Done])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
@@ -1025,7 +1225,28 @@ flowchart TD
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Branch</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;">
+<div><strong>approve</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;shouldRunChecks&quot;:false}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>APP-1: Approve <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+</div>
+</div><div style="margin-bottom:10px;">
+<div><strong>reject</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;shouldRunChecks&quot;:false}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>REJ-1: Reject <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+</div>
+</div><div style="margin-bottom:10px;">
+<div><strong>review</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:2px;color:#475569;">Ctx: {&quot;shouldRunChecks&quot;:false}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>REV-1: Review <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+</div>
+</div></td>
 </tr></tbody>
 </table>
 <!-- structured-process-demo:branch-skip-demo:html-table:end --></div></div>

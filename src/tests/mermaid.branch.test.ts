@@ -28,21 +28,23 @@ describe('renderProcessAsMermaidGraph branch rendering', () => {
     const graph = renderProcessAsMermaidGraph(result)
 
     expect(graph).toContain('step_0["ROUTE:\nbranches: expense"]')
-    expect(graph).toContain('branch_0_0_start([Branch: expense])')
+    expect(graph).toContain('branch_0_0_start["Branch: expense"]')
     expect(graph).toContain('branch_0_0_step_0["EX-1: Handle expense\n[ok]"]')
+    expect(graph).toContain('branch_0_1_start["Branch: income\n[skip]"]')
+    expect(graph).toContain('branch_0_1_step_0["IN-1: Handle income\n[skip]"]')
     expect(graph).toContain('branch_0_result["ROUTE:\nResult: ok"]')
     expect(graph).toContain('step_0 --> branch_0_0_start')
     expect(graph).toContain('branch_0_result --> done')
   })
 
   it('shows nested branch steps and info for multiple selected branches', async () => {
-    const taxFlow = createAsync<{ checks: Array<'tax' | 'fraud'> }>()
+    const taxFlow = createAsync<{ checks: Array<'tax' | 'fraud' | 'policy'> }>()
       .step('TAX-1', 'Check taxes', async () => ({
         checked: true,
       }))
       .build()
 
-    const fraudFlow = createAsync<{ checks: Array<'tax' | 'fraud'> }, string>()
+    const fraudFlow = createAsync<{ checks: Array<'tax' | 'fraud' | 'policy'> }, string>()
       .step('FRAUD-1', 'Check fraud', async () =>
         stepResult({
           result: 'error',
@@ -51,10 +53,17 @@ describe('renderProcessAsMermaidGraph branch rendering', () => {
       )
       .build()
 
-    const flow = createAsync<{ checks: Array<'tax' | 'fraud'> }>()
+    const policyFlow = createAsync<{ checks: Array<'tax' | 'fraud' | 'policy'> }>()
+      .step('POLICY-1', 'Check policy', async () => ({
+        checkedPolicy: true,
+      }))
+      .build()
+
+    const flow = createAsync<{ checks: Array<'tax' | 'fraud' | 'policy'> }>()
       .branch('CHECKS', ({ checks }) => checks, {
         tax: taxFlow,
         fraud: fraudFlow,
+        policy: policyFlow,
       })
       .build()
 
@@ -62,11 +71,13 @@ describe('renderProcessAsMermaidGraph branch rendering', () => {
     const graph = renderProcessAsMermaidGraph(result)
 
     expect(graph).toContain('step_0["CHECKS:\nbranches: tax, fraud"]')
-    expect(graph).toContain('branch_0_0_start([Branch: tax])')
+    expect(graph).toContain('branch_0_0_start["Branch: tax"]')
     expect(graph).toContain('branch_0_0_step_0["TAX-1: Check taxes\n[ok]"]')
     expect(graph).toContain('branch_0_result["CHECKS:\nResult: error"]')
-    expect(graph).toContain('branch_0_1_start([Branch: fraud])')
+    expect(graph).toContain('branch_0_1_start["Branch: fraud"]')
     expect(graph).toContain('branch_0_1_step_0["FRAUD-1: Check fraud\n[error]\nFraud review failed."]')
+    expect(graph).toContain('branch_0_2_start["Branch: policy\n[skip]"]')
+    expect(graph).toContain('branch_0_2_step_0["POLICY-1: Check policy\n[skip]"]')
     expect(graph).toContain('branch_0_result --> done')
   })
 })

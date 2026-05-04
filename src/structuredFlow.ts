@@ -171,6 +171,23 @@ function normalizeBranchSelection<Key extends string>(
   return [selection as Key]
 }
 
+function createSkippedBranchRun<Key extends string, Ctx extends object>(
+  key: Key,
+  flow: FlowLike<Ctx, any>,
+  ctx: Ctx
+): BranchRunResult<Key> {
+  return {
+    key,
+    result: 'skip',
+    ctx,
+    steps: flow.steps.map(({ id, description }) => ({ id, description })),
+    stepResults: flow.steps.map(({ id }) => ({
+      id,
+      result: 'skip',
+    })),
+  }
+}
+
 function runBranchSync<Ctx extends object, TBranches extends FlowBranches<Ctx, FlowResult<any, any>>>(
   stepId: string,
   ctx: Ctx,
@@ -180,11 +197,18 @@ function runBranchSync<Ctx extends object, TBranches extends FlowBranches<Ctx, F
   const selection = normalizeBranchSelection(stepId, select(ctx))
 
   if (isStepStatus(selection)) {
-    return { result: selection }
+    return {
+      result: selection,
+      branches: Object.entries(branches).map(([key, flow]) =>
+        createSkippedBranchRun(key as BranchKey<TBranches>, flow, ctx)
+      ),
+    }
   }
 
-  const branchRuns = selection.map((key) => {
+  const selectedKeys = new Set<BranchKey<TBranches>>()
+  const selectedBranchRuns = selection.map((key) => {
     assertValidBranchKey(stepId, key, branches)
+    selectedKeys.add(key)
 
     const result = branches[key].run(ctx)
 
@@ -196,9 +220,13 @@ function runBranchSync<Ctx extends object, TBranches extends FlowBranches<Ctx, F
       stepResults: result.stepResults,
     } satisfies BranchRunResult<BranchKey<TBranches>>
   })
+  const skippedBranchRuns = Object.entries(branches)
+    .filter(([key]) => !selectedKeys.has(key as BranchKey<TBranches>))
+    .map(([key, flow]) => createSkippedBranchRun(key as BranchKey<TBranches>, flow, ctx))
+  const branchRuns = [...selectedBranchRuns, ...skippedBranchRuns]
 
   return {
-    result: mergeStepStatuses(branchRuns.map((branch) => branch.result)),
+    result: mergeStepStatuses(selectedBranchRuns.map((branch) => branch.result)),
     branches: branchRuns,
   }
 }
@@ -212,12 +240,19 @@ async function runBranchAsync<Ctx extends object, TBranches extends FlowBranches
   const selection = normalizeBranchSelection(stepId, select(ctx))
 
   if (isStepStatus(selection)) {
-    return { result: selection }
+    return {
+      result: selection,
+      branches: Object.entries(branches).map(([key, flow]) =>
+        createSkippedBranchRun(key as BranchKey<TBranches>, flow, ctx)
+      ),
+    }
   }
 
-  const branchRuns = await Promise.all(
+  const selectedKeys = new Set<BranchKey<TBranches>>()
+  const selectedBranchRuns = await Promise.all(
     selection.map(async (key) => {
       assertValidBranchKey(stepId, key, branches)
+      selectedKeys.add(key)
 
       const result = await branches[key].run(ctx)
 
@@ -230,9 +265,13 @@ async function runBranchAsync<Ctx extends object, TBranches extends FlowBranches
       } satisfies BranchRunResult<BranchKey<TBranches>>
     })
   )
+  const skippedBranchRuns = Object.entries(branches)
+    .filter(([key]) => !selectedKeys.has(key as BranchKey<TBranches>))
+    .map(([key, flow]) => createSkippedBranchRun(key as BranchKey<TBranches>, flow, ctx))
+  const branchRuns = [...selectedBranchRuns, ...skippedBranchRuns]
 
   return {
-    result: mergeStepStatuses(branchRuns.map((branch) => branch.result)),
+    result: mergeStepStatuses(selectedBranchRuns.map((branch) => branch.result)),
     branches: branchRuns,
   }
 }
