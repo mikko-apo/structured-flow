@@ -10,6 +10,7 @@ This example shows the intended flow of the sequence API and two concrete runs o
 - `createSyncFlow<Ctx, Info>()` starts a builder that accepts only synchronous step functions.
 - `createAsyncFlow<Ctx, Info>()` starts a builder that accepts synchronous or async step functions.
 - `.step(id, description, fn)` appends a step that can extend ctx and return structured step results.
+- `.branch(id, select, branches)` appends a branch step that runs one or more child flows selected from `branches`.
 - `.build()` returns a sequence with a single `run()` method.
 - `FlowResult` contains the accumulated ctx, per-step results, and helper methods like `failedStepIds()`.
 - `renderProcessAsMermaidGraph(...)` can render a builder, sequence, or executed sequence result.
@@ -30,6 +31,12 @@ current accumulated context and returns a structured step result object. That re
 Execution continues through `ok`, `error`, and explicit `skip` results. Execution stops early on `stop` or
 `exception`, and all remaining steps are recorded as `skip`. If a step throws, the sequence catches it, records that
 step as `exception`, and then marks the remaining steps as `skip`.
+
+Branch steps call `select(ctx)` to choose which child flow or flows to run. `select` can return a single branch key,
+multiple keys, or a direct step result value like `skip`, `error`, `stop`, or `exception`. Returning an unknown key
+fails the branch step. Child flows always start from the parent step's current ctx, but their added ctx fields stay
+inside the child flow result and are not merged back into the parent ctx. Nested child step results are recorded under
+the parent step result's `branches` array.
 
 The table below summarizes how each recorded `result` value affects execution and context updates:
 
@@ -64,3 +71,29 @@ The table below summarizes how each recorded `result` value affects execution an
 ## Exception Demo
 
 {{EXCEPTION_DEMO_SECTION}}
+
+# branch() examples
+
+## One Of Three Branches
+
+This run selects exactly one branch from three branches.
+
+{{BRANCH_ONE_OF_THREE_CODE_BLOCK}}
+
+{{BRANCH_ONE_OF_THREE_DEMO_SECTION}}
+
+## Two Of Three Branches
+
+This run selects two branches from three branches and records each branch result separately.
+
+{{BRANCH_TWO_OF_THREE_CODE_BLOCK}}
+
+{{BRANCH_TWO_OF_THREE_DEMO_SECTION}}
+
+## Skipped Branch
+
+This run returns `skip` directly from the selector, so no child branch flow is executed.
+
+{{BRANCH_SKIP_CODE_BLOCK}}
+
+{{BRANCH_SKIP_DEMO_SECTION}}
