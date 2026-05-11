@@ -43,8 +43,10 @@ function renderStepLabel(step: MermaidStep, stepResult?: MermaidStepResult): str
   const branchKeys = stepResult?.branches?.filter((branch) => branch.result !== 'skip').map((branch) => String(branch.key))
   const isBranchStep = step.description === 'Branch'
 
-  if (branchKeys != null && branchKeys.length > 0) {
-    return `${step.id}:\nbranches: ${branchKeys.join(', ')}`
+  if (stepResult != null && branchKeys != null && branchKeys.length > 0) {
+    return `${step.id}:\nbranches: ${branchKeys.join(', ')}\n[${stepResult.result}]${
+      stepResult.info == null ? '' : `\n${String(stepResult.info)}`
+    }`
   }
 
   if (isBranchStep && stepResult != null) {
@@ -64,18 +66,22 @@ function renderStepLabel(step: MermaidStep, stepResult?: MermaidStepResult): str
 
 function renderBranchGraphLines(
   parentNodeId: string,
-  nextNodeId: string,
+  nextNodeId: string | undefined,
   stepResult: MermaidStepResult,
   branchPrefix: string
 ): string[] {
   if (stepResult.branches == null || stepResult.branches.length === 0) {
-    return [`  ${parentNodeId} --> ${nextNodeId}`]
+    return nextNodeId == null ? [] : [`  ${parentNodeId} --> ${nextNodeId}`]
   }
 
   const lines: string[] = []
-  const branchResultNodeId = `${branchPrefix}_result`
-  lines.push(`  ${branchResultNodeId}["${escapeMermaidLabel(`${stepResult.id}:\nResult: ${stepResult.result}`)}"]`)
-  lines.push(`  class ${branchResultNodeId} ${statusToClassName(stepResult.result)}`)
+  const branchEndNodeId = nextNodeId == null ? undefined : `${branchPrefix}_end`
+
+  if (branchEndNodeId != null) {
+    lines.push(`  ${branchEndNodeId}["${escapeMermaidLabel(`${stepResult.id}:\nend`)}"]`)
+    lines.push(`  ${branchEndNodeId} --> ${nextNodeId}`)
+    lines.push(`  class ${branchEndNodeId} join`)
+  }
 
   for (const [branchIndex, branch] of stepResult.branches.entries()) {
     const branchNodePrefix = `${branchPrefix}_${branchIndex}`
@@ -87,16 +93,14 @@ function renderBranchGraphLines(
     lines.push(`  ${branchStartNodeId}["${escapeMermaidLabel(branchStartLabel)}"]`)
     lines.push(`  ${parentNodeId} --> ${branchStartNodeId}`)
 
-    if (branch.steps.length === 0) {
-      lines.push(`  ${branchStartNodeId} --> ${branchResultNodeId}`)
-    } else {
+    if (branch.steps.length > 0) {
       for (const [childStepIndex, childStep] of branch.steps.entries()) {
         const childNodeId = `${branchNodePrefix}_step_${childStepIndex}`
         const childStepResult = branchResultById.get(childStep.id)
         const childLabel = renderStepLabel(childStep, childStepResult)
         const previousNodeId = childStepIndex === 0 ? branchStartNodeId : `${branchNodePrefix}_step_${childStepIndex - 1}`
         const targetNodeId =
-          childStepIndex === branch.steps.length - 1 ? branchResultNodeId : `${branchNodePrefix}_step_${childStepIndex + 1}`
+          childStepIndex === branch.steps.length - 1 ? branchEndNodeId : `${branchNodePrefix}_step_${childStepIndex + 1}`
 
         lines.push(`  ${childNodeId}["${escapeMermaidLabel(childLabel)}"]`)
         lines.push(`  ${previousNodeId} --> ${childNodeId}`)
@@ -108,12 +112,12 @@ function renderBranchGraphLines(
           lines.push(`  ${childNodeId} --> ${targetNodeId}`)
         }
       }
+    } else if (branchEndNodeId != null) {
+      lines.push(`  ${branchStartNodeId} --> ${branchEndNodeId}`)
     }
 
     lines.push(`  class ${branchStartNodeId} ${branch.result === 'skip' ? 'neutral' : 'executed'}`)
   }
-
-  lines.push(`  ${branchResultNodeId} --> ${nextNodeId}`)
 
   return lines
 }
@@ -179,6 +183,7 @@ export function renderProcessAsMermaidGraph(value: MermaidRenderable): string {
   lines.push('  classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px')
   lines.push('  classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px')
   lines.push('  classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2')
+  lines.push('  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569')
 
   if (sequenceResult != null) {
     for (const [index, step] of steps.entries()) {

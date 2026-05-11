@@ -139,6 +139,7 @@ flowchart TD
   classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
   classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
 ```
 <!-- structured-process-demo:static-graph:mermaid:end -->
 
@@ -224,6 +225,7 @@ The submitted form and occupancy trail tell a consistent story."]
   classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
   classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
   class step_0 success
   class step_1 success
   class step_2 success
@@ -335,6 +337,7 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
   classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
   classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
   class step_0 success
   class step_1 failure
   class step_2 success
@@ -445,6 +448,7 @@ The first two records are enough here, so the sequence can finish early."]
   classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
   classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
   class step_0 success
   class step_1 complete
   class step_2 neutral
@@ -557,6 +561,7 @@ A contradictory record was discovered, so the sequence stops immediately."]
   classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
   classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
   class step_0 success
   class step_1 failure
   class step_2 neutral
@@ -729,16 +734,18 @@ const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
 flowchart TD
   start([Start])
   step_0["ROUTE:
-branches: expense"]
-  branch_0_result["ROUTE:
-Result: ok"]
-  class branch_0_result success
+branches: expense
+[ok]"]
+  branch_0_end["ROUTE:
+end"]
+  branch_0_end --> done
+  class branch_0_end join
   branch_0_0_start["Branch: expense"]
   step_0 --> branch_0_0_start
   branch_0_0_step_0["EX-1: Handle expense
 [ok]"]
   branch_0_0_start --> branch_0_0_step_0
-  branch_0_0_step_0 --> branch_0_result
+  branch_0_0_step_0 --> branch_0_end
   class branch_0_0_step_0 success
   class branch_0_0_start executed
   branch_0_1_start["Branch: income
@@ -747,7 +754,7 @@ Result: ok"]
   branch_0_1_step_0["IN-1: Handle income
 [skip]"]
   branch_0_1_start --> branch_0_1_step_0
-  branch_0_1_step_0 --> branch_0_result
+  branch_0_1_step_0 --> branch_0_end
   class branch_0_1_step_0 neutral
   class branch_0_1_start neutral
   branch_0_2_start["Branch: transfer
@@ -756,10 +763,9 @@ Result: ok"]
   branch_0_2_step_0["TR-1: Handle transfer
 [skip]"]
   branch_0_2_start --> branch_0_2_step_0
-  branch_0_2_step_0 --> branch_0_result
+  branch_0_2_step_0 --> branch_0_end
   class branch_0_2_step_0 neutral
   class branch_0_2_start neutral
-  branch_0_result --> done
   done([Done])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
@@ -767,6 +773,7 @@ Result: ok"]
   classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
   classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
   class step_0 success
   class start executed
   class done success
@@ -968,16 +975,18 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
 flowchart TD
   start([Start])
   step_0["CHECKS:
-branches: tax, fraud"]
-  branch_0_result["CHECKS:
-Result: error"]
-  class branch_0_result failure
+branches: tax, fraud
+[error]"]
+  branch_0_end["CHECKS:
+end"]
+  branch_0_end --> done
+  class branch_0_end join
   branch_0_0_start["Branch: tax"]
   step_0 --> branch_0_0_start
   branch_0_0_step_0["TAX-1: Check taxes
 [ok]"]
   branch_0_0_start --> branch_0_0_step_0
-  branch_0_0_step_0 --> branch_0_result
+  branch_0_0_step_0 --> branch_0_end
   class branch_0_0_step_0 success
   class branch_0_0_start executed
   branch_0_1_start["Branch: fraud"]
@@ -986,7 +995,7 @@ Result: error"]
 [error]
 Fraud review failed."]
   branch_0_1_start --> branch_0_1_step_0
-  branch_0_1_step_0 --> branch_0_result
+  branch_0_1_step_0 --> branch_0_end
   class branch_0_1_step_0 failure
   class branch_0_1_start executed
   branch_0_2_start["Branch: policy
@@ -995,10 +1004,9 @@ Fraud review failed."]
   branch_0_2_step_0["POLICY-1: Check policy
 [skip]"]
   branch_0_2_start --> branch_0_2_step_0
-  branch_0_2_step_0 --> branch_0_result
+  branch_0_2_step_0 --> branch_0_end
   class branch_0_2_step_0 neutral
   class branch_0_2_start neutral
-  branch_0_result --> done
   done([Completed with Errors])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
@@ -1006,6 +1014,7 @@ Fraud review failed."]
   classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
   classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
   class step_0 failure
   class start executed
   class done failure
@@ -1215,24 +1224,28 @@ const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: Se
 flowchart TD
   start([Start])
   step_0["ROOT-ROUTE:
-branches: B"]
-  branch_0_result["ROOT-ROUTE:
-Result: ok"]
-  class branch_0_result success
+branches: B
+[ok]"]
+  branch_0_end["ROOT-ROUTE:
+end"]
+  branch_0_end --> done
+  class branch_0_end join
   branch_0_0_start["Branch: B"]
   step_0 --> branch_0_0_start
   branch_0_0_step_0["B-ROUTE:
-branches: D"]
+branches: D
+[ok]"]
   branch_0_0_start --> branch_0_0_step_0
-  branch_0_0_step_0_branch_result["B-ROUTE:
-Result: ok"]
-  class branch_0_0_step_0_branch_result success
+  branch_0_0_step_0_branch_end["B-ROUTE:
+end"]
+  branch_0_0_step_0_branch_end --> branch_0_end
+  class branch_0_0_step_0_branch_end join
   branch_0_0_step_0_branch_0_start["Branch: D"]
   branch_0_0_step_0 --> branch_0_0_step_0_branch_0_start
   branch_0_0_step_0_branch_0_step_0["D-1: Handle D
 [ok]"]
   branch_0_0_step_0_branch_0_start --> branch_0_0_step_0_branch_0_step_0
-  branch_0_0_step_0_branch_0_step_0 --> branch_0_0_step_0_branch_result
+  branch_0_0_step_0_branch_0_step_0 --> branch_0_0_step_0_branch_end
   class branch_0_0_step_0_branch_0_step_0 success
   class branch_0_0_step_0_branch_0_start executed
   branch_0_0_step_0_branch_1_start["Branch: C
@@ -1241,10 +1254,9 @@ Result: ok"]
   branch_0_0_step_0_branch_1_step_0["C-1: Handle C
 [skip]"]
   branch_0_0_step_0_branch_1_start --> branch_0_0_step_0_branch_1_step_0
-  branch_0_0_step_0_branch_1_step_0 --> branch_0_0_step_0_branch_result
+  branch_0_0_step_0_branch_1_step_0 --> branch_0_0_step_0_branch_end
   class branch_0_0_step_0_branch_1_step_0 neutral
   class branch_0_0_step_0_branch_1_start neutral
-  branch_0_0_step_0_branch_result --> branch_0_result
   class branch_0_0_step_0 success
   class branch_0_0_start executed
   branch_0_1_start["Branch: A
@@ -1253,10 +1265,9 @@ Result: ok"]
   branch_0_1_step_0["A-1: Handle A
 [skip]"]
   branch_0_1_start --> branch_0_1_step_0
-  branch_0_1_step_0 --> branch_0_result
+  branch_0_1_step_0 --> branch_0_end
   class branch_0_1_step_0 neutral
   class branch_0_1_start neutral
-  branch_0_result --> done
   done([Done])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
@@ -1264,6 +1275,7 @@ Result: ok"]
   classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
   classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
   class step_0 success
   class start executed
   class done success
@@ -1445,16 +1457,17 @@ flowchart TD
   start([Start])
   step_0["OPTIONAL-CHECKS: branch()
 [skip]"]
-  branch_0_result["OPTIONAL-CHECKS:
-Result: skip"]
-  class branch_0_result neutral
+  branch_0_end["OPTIONAL-CHECKS:
+end"]
+  branch_0_end --> done
+  class branch_0_end join
   branch_0_0_start["Branch: approve
 [skip]"]
   step_0 --> branch_0_0_start
   branch_0_0_step_0["APP-1: Approve
 [skip]"]
   branch_0_0_start --> branch_0_0_step_0
-  branch_0_0_step_0 --> branch_0_result
+  branch_0_0_step_0 --> branch_0_end
   class branch_0_0_step_0 neutral
   class branch_0_0_start neutral
   branch_0_1_start["Branch: reject
@@ -1463,7 +1476,7 @@ Result: skip"]
   branch_0_1_step_0["REJ-1: Reject
 [skip]"]
   branch_0_1_start --> branch_0_1_step_0
-  branch_0_1_step_0 --> branch_0_result
+  branch_0_1_step_0 --> branch_0_end
   class branch_0_1_step_0 neutral
   class branch_0_1_start neutral
   branch_0_2_start["Branch: review
@@ -1472,10 +1485,9 @@ Result: skip"]
   branch_0_2_step_0["REV-1: Review
 [skip]"]
   branch_0_2_start --> branch_0_2_step_0
-  branch_0_2_step_0 --> branch_0_result
+  branch_0_2_step_0 --> branch_0_end
   class branch_0_2_step_0 neutral
   class branch_0_2_start neutral
-  branch_0_result --> done
   done([Done])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
@@ -1483,6 +1495,7 @@ Result: skip"]
   classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
   classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
   class step_0 neutral
   class start executed
   class done success
