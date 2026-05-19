@@ -1,65 +1,123 @@
 // --- Core Types ---
 
 type MaybePromise<T> = T | Promise<T>
-
+type FlowMode = 'sync' | 'async'
 type ReservedStepField = 'result' | 'info' | 'branches'
 
-export type FlowStepResult<Id extends string = string, Info = unknown> = {
+export type FlowStepResult<Id extends string = string, Info = unknown, AddToCtx extends object = object> = {
   id: Id
   result: StepStatus
   info?: Info
-  branches?: BranchRunResult[]
+  addToCtx?: AddToCtx
+  branches?: BranchRunResult<string, any>[]
 }
 
-export type FlowStepDefinition = {
+export type FlowStepDefinition<StepDefinition = string> = {
   id: string
-  description: string
+  description: StepDefinition
 }
 
-export type BranchRunResult<Key extends string = string> = {
+export type BranchRunResult<Key extends string = string, StepDefinition = string> = {
   key: Key
   result: StepStatus
-  ctx: object
-  steps: readonly FlowStepDefinition[]
+  finalCtx: object
+  steps: readonly FlowStepDefinition<StepDefinition>[]
   stepResults: Array<FlowStepResult>
 }
 
+export type EnrichedFlowStepResult<
+  StepDefinition = string,
+  Id extends string = string,
+  Info = unknown,
+  AddToCtx extends object = object,
+> = Omit<FlowStepResult<Id, Info, AddToCtx>, 'branches'> & {
+  description: StepDefinition
+  branches?: EnrichedBranchRunResult<string, any>[]
+}
+
+export type EnrichedBranchRunResult<Key extends string = string, StepDefinition = string> = Omit<
+  BranchRunResult<Key, StepDefinition>,
+  'stepResults'
+> & {
+  stepResults: Array<EnrichedFlowStepResult<StepDefinition>>
+}
+
+type FlowRunResult<Mode extends FlowMode, Steps extends readonly AnyStepDefinition[], Ctx> = Mode extends 'sync'
+  ? FlowResult<Steps, Ctx>
+  : Promise<FlowResult<Steps, Ctx>>
+
+// can be either Flow or
 export type FlowLike<
   InitialCtx extends object,
+  StepDefinition = string,
   Result extends MaybePromise<FlowResult<any, any>> = MaybePromise<FlowResult<any, any>>,
 > = {
-  steps: readonly { id: string; description: string }[]
+  steps: readonly FlowStepDefinition<StepDefinition>[]
   run(initial: InitialCtx): Result
 }
 
-type FlowBranches<InitialCtx extends object, Result extends MaybePromise<FlowResult<any, any>> = MaybePromise<FlowResult<any, any>>> =
-  Record<string, FlowLike<InitialCtx, Result>>
+type BuildableFlowLike<
+  InitialCtx extends object,
+  StepDefinition = string,
+  Result extends MaybePromise<FlowResult<any, any>> = MaybePromise<FlowResult<any, any>>,
+> = {
+  steps: readonly FlowStepDefinition<StepDefinition>[]
+  build(): FlowLike<InitialCtx, StepDefinition, Result>
+}
+
+type FlowBranchSource<
+  InitialCtx extends object,
+  StepDefinition = string,
+  Result extends MaybePromise<FlowResult<any, any>> = MaybePromise<FlowResult<any, any>>,
+> = FlowLike<InitialCtx, StepDefinition, Result> | BuildableFlowLike<InitialCtx, StepDefinition, Result>
+
+type FlowBranches<
+  InitialCtx extends object,
+  StepDefinition = string,
+  Result extends MaybePromise<FlowResult<any, any>> = MaybePromise<FlowResult<any, any>>,
+> = Record<string, FlowLike<InitialCtx, StepDefinition, Result>>
+
+type FlowBranchSources<
+  InitialCtx extends object,
+  StepDefinition = string,
+  Result extends MaybePromise<FlowResult<any, any>> = MaybePromise<FlowResult<any, any>>,
+> = Record<string, FlowBranchSource<InitialCtx, StepDefinition, Result>>
 
 type BranchKey<TBranches> = Extract<keyof TBranches, string>
 
 export type BranchSelection<Key extends string> = Key | readonly Key[] | StepStatus
 
-type StepResult<AddCtx extends object, Info> = { info?: Info; branches?: BranchRunResult[] } & (
-  | ({ result?: 'ok' } & AddCtx)
-  | ({ result: 'stop' } & AddCtx)
-  | { result: 'skip' | 'exception' | 'error' }
-)
+type StepResult<AddCtx extends object, Info> = {
+  info?: Info
+  branches?: BranchRunResult<string, any>[]
+} & (({ result?: 'ok' } & AddCtx) | ({ result: 'stop' } & AddCtx) | { result: 'skip' | 'exception' | 'error' })
 
 export type StepStatus = NonNullable<StepResult<Record<never, never>, unknown>['result']>
 
 type StepCtxResult<AddCtx extends object, Info> = Extract<StepResult<AddCtx, Info>, { result?: 'ok' | 'stop' }>
 
 type StepFn<InputCtx, AddCtx extends object, Info> = (params: InputCtx) => MaybePromise<StepResult<AddCtx, Info>>
+
 type SyncStepReturn<Result, Info> =
   Result extends Promise<any> ? never : Result extends StepResult<object, Info> ? Result : never
 
 type AsyncStepReturn<Result, Info> = Awaited<Result> extends StepResult<object, Info> ? Result : never
 
-type StepDefinition<Id extends string, InputCtx, AddCtx extends object, Info> = {
+type StepReturnByMode<Mode extends FlowMode, Result, Info> = Mode extends 'sync'
+  ? SyncStepReturn<Result, Info>
+  : AsyncStepReturn<Result, Info>
+
+type ResolvedStepReturn<Mode extends FlowMode, Result, Info> = Mode extends 'sync'
+  ? SyncStepReturn<Result, Info>
+  : Awaited<AsyncStepReturn<Result, Info>>
+
+type StepDefinition<Id extends string, InputCtx, AddCtx extends object, Info, StepDescription> = {
   id: Id
-  description: string
+  description: StepDescription
   fn: StepFn<InputCtx, AddCtx, Info>
 }
+
+type AnyStepDefinition = StepDefinition<string, any, object, any, any>
 
 // --- Helpers ---
 
@@ -77,10 +135,23 @@ type StepId<CurrentStep> = CurrentStep extends { id: infer Id extends string } ?
 
 type StepInfo<CurrentStep> = CurrentStep extends { fn: StepFn<any, any, infer Info> } ? Info : never
 
+type StepAddToCtx<CurrentStep> = CurrentStep extends { fn: StepFn<any, infer AddCtx, any> } ? AddCtx : never
+
+type StepDescriptionOf<CurrentStep> = CurrentStep extends { description: infer StepDescription } ? StepDescription : never
+
 type StepResultEntry<CurrentStep extends { id: string }> = Pick<CurrentStep, 'id'> & {
   result: StepStatus
   info?: StepInfo<CurrentStep>
-  branches?: BranchRunResult[]
+  addToCtx?: StepAddToCtx<CurrentStep>
+  branches?: BranchRunResult<string, any>[]
+}
+
+type EnrichedStepResultEntry<CurrentStep extends { id: string; description: unknown }> = Omit<
+  StepResultEntry<CurrentStep>,
+  'branches'
+> & {
+  description: StepDescriptionOf<CurrentStep>
+  branches?: EnrichedBranchRunResult<string, any>[]
 }
 
 type StepIds<Steps extends readonly unknown[]> = StepId<Step<Steps>>
@@ -142,7 +213,7 @@ function mergeStepStatuses(results: readonly StepStatus[]): StepStatus {
   )
 }
 
-function assertValidBranchKey<TBranches extends FlowBranches<any>>(
+function assertValidBranchKey<TBranches extends FlowBranches<any, any, any>>(
   stepId: string,
   key: string,
   branches: TBranches
@@ -171,15 +242,34 @@ function normalizeBranchSelection<Key extends string>(
   return [selection as Key]
 }
 
-function createSkippedBranchRun<Key extends string, Ctx extends object>(
+function toFlowLike<InitialCtx extends object, StepDefinition, Result extends MaybePromise<FlowResult<any, any>>>(
+  flow: FlowBranchSource<InitialCtx, StepDefinition, Result>
+): FlowLike<InitialCtx, StepDefinition, Result> {
+  return 'run' in flow ? flow : flow.build()
+}
+
+function normalizeFlowBranches<
+  InitialCtx extends object,
+  StepDefinition,
+  Result extends MaybePromise<FlowResult<any, any>>,
+  TBranches extends FlowBranchSources<InitialCtx, StepDefinition, Result>,
+>(branches: TBranches): FlowBranches<InitialCtx, StepDefinition, Result> {
+  return Object.fromEntries(Object.entries(branches).map(([key, flow]) => [key, toFlowLike(flow)])) as FlowBranches<
+    InitialCtx,
+    StepDefinition,
+    Result
+  >
+}
+
+function createSkippedBranchRun<Key extends string, Ctx extends object, StepDescription>(
   key: Key,
-  flow: FlowLike<Ctx, any>,
+  flow: FlowLike<Ctx, StepDescription, any>,
   ctx: Ctx
-): BranchRunResult<Key> {
+): BranchRunResult<Key, StepDescription> {
   return {
     key,
     result: 'skip',
-    ctx,
+    finalCtx: ctx,
     steps: flow.steps.map(({ id, description }) => ({ id, description })),
     stepResults: flow.steps.map(({ id }) => ({
       id,
@@ -188,7 +278,11 @@ function createSkippedBranchRun<Key extends string, Ctx extends object>(
   }
 }
 
-function runBranchSync<Ctx extends object, TBranches extends FlowBranches<Ctx, FlowResult<any, any>>>(
+function runBranchSync<
+  Ctx extends object,
+  StepDescription,
+  TBranches extends FlowBranches<Ctx, StepDescription, FlowResult<any, any>>,
+>(
   stepId: string,
   ctx: Ctx,
   select: (ctx: Ctx) => BranchSelection<BranchKey<TBranches>>,
@@ -215,10 +309,13 @@ function runBranchSync<Ctx extends object, TBranches extends FlowBranches<Ctx, F
     return {
       key,
       result: getOverallFlowStatus(result),
-      ctx: result.ctx,
-      steps: result.steps.map(({ id, description }: FlowStepDefinition) => ({ id, description })),
+      finalCtx: result.finalCtx,
+      steps: result.steps.map(({ id, description }: FlowStepDefinition<StepDescription>) => ({
+        id,
+        description,
+      })),
       stepResults: result.stepResults,
-    } satisfies BranchRunResult<BranchKey<TBranches>>
+    } satisfies BranchRunResult<BranchKey<TBranches>, StepDescription>
   })
   const skippedBranchRuns = Object.entries(branches)
     .filter(([key]) => !selectedKeys.has(key as BranchKey<TBranches>))
@@ -231,7 +328,11 @@ function runBranchSync<Ctx extends object, TBranches extends FlowBranches<Ctx, F
   }
 }
 
-async function runBranchAsync<Ctx extends object, TBranches extends FlowBranches<Ctx>>(
+async function runBranchAsync<
+  Ctx extends object,
+  StepDescription,
+  TBranches extends FlowBranches<Ctx, StepDescription>,
+>(
   stepId: string,
   ctx: Ctx,
   select: (ctx: Ctx) => BranchSelection<BranchKey<TBranches>>,
@@ -259,10 +360,13 @@ async function runBranchAsync<Ctx extends object, TBranches extends FlowBranches
       return {
         key,
         result: getOverallFlowStatus(result),
-        ctx: result.ctx,
-        steps: result.steps.map(({ id, description }: FlowStepDefinition) => ({ id, description })),
+        finalCtx: result.finalCtx,
+        steps: result.steps.map(({ id, description }: FlowStepDefinition<StepDescription>) => ({
+          id,
+          description,
+        })),
         stepResults: result.stepResults,
-      } satisfies BranchRunResult<BranchKey<TBranches>>
+      } satisfies BranchRunResult<BranchKey<TBranches>, StepDescription>
     })
   )
   const skippedBranchRuns = Object.entries(branches)
@@ -278,46 +382,124 @@ async function runBranchAsync<Ctx extends object, TBranches extends FlowBranches
 
 // --- Result ---
 
-export class FlowResult<Steps extends readonly StepDefinition<any, any, any, any>[], Ctx> {
+export class FlowResult<Steps extends readonly AnyStepDefinition[], Ctx> {
   constructor(
     readonly steps: Steps,
     readonly ok: boolean,
     readonly stepResults: Array<StepResultEntry<Step<Steps>>>,
-    readonly ctx: Expand<Ctx>
+    readonly finalCtx: Expand<Ctx>
   ) {}
 
   failedStepIds(): StepIds<Steps>[] {
-    return this.stepResults.filter((r) => r.result === 'error' || r.result === 'exception').map((r) => r.id)
+    return this.stepResults
+      .filter((r) => r.result === 'error' || r.result === 'exception')
+      .map((r) => r.id) as StepIds<Steps>[]
   }
+}
+
+export class EnrichedFlowResult<Steps extends readonly AnyStepDefinition[], Ctx> {
+  constructor(
+    readonly steps: Steps,
+    readonly ok: boolean,
+    readonly stepResults: Array<EnrichedStepResultEntry<Step<Steps>>>,
+    readonly finalCtx: Expand<Ctx>
+  ) {}
+
+  failedStepIds(): StepIds<Steps>[] {
+    return this.stepResults
+      .filter((r) => r.result === 'error' || r.result === 'exception')
+      .map((r) => r.id) as StepIds<Steps>[]
+  }
+}
+
+function assertSameFlowSteps(
+  flowSteps: readonly FlowStepDefinition<unknown>[],
+  resultSteps: readonly FlowStepDefinition<unknown>[]
+): void {
+  if (
+    flowSteps.length !== resultSteps.length ||
+    flowSteps.some((step, index) => step.id !== resultSteps[index]?.id || step.description !== resultSteps[index]?.description)
+  ) {
+    throw new Error('Flow.enrichResult() received a result from a different flow')
+  }
+}
+
+function getStepDescriptionOrThrow<StepDescription>(
+  steps: readonly FlowStepDefinition<StepDescription>[],
+  stepId: string
+): StepDescription {
+  const step = steps.find((candidate) => candidate.id === stepId)
+
+  if (step == null) {
+    throw new Error(`Flow result referenced unknown step "${stepId}"`)
+  }
+
+  return step.description
+}
+
+function enrichBranchRuns(branches?: BranchRunResult<string, any>[]): EnrichedBranchRunResult<string, any>[] | undefined {
+  return branches?.map((branch) => ({
+    key: branch.key,
+    result: branch.result,
+    finalCtx: branch.finalCtx,
+    steps: branch.steps,
+    stepResults: branch.stepResults.map((stepResult) => ({
+      id: stepResult.id,
+      result: stepResult.result,
+      description: getStepDescriptionOrThrow(branch.steps, stepResult.id),
+      ...(stepResult.info === undefined ? {} : { info: stepResult.info }),
+      ...(stepResult.addToCtx === undefined ? {} : { addToCtx: stepResult.addToCtx }),
+      ...(stepResult.branches == null ? {} : { branches: enrichBranchRuns(stepResult.branches) }),
+    })),
+  }))
+}
+
+function enrichStepResults<Steps extends readonly AnyStepDefinition[]>(
+  steps: Steps,
+  stepResults: Array<StepResultEntry<Step<Steps>>>
+): Array<EnrichedStepResultEntry<Step<Steps>>> {
+  return stepResults.map((stepResult) => ({
+    id: stepResult.id,
+    result: stepResult.result,
+    description: getStepDescriptionOrThrow(steps, stepResult.id) as StepDescriptionOf<Step<Steps>>,
+    ...(stepResult.info === undefined ? {} : { info: stepResult.info }),
+    ...(stepResult.addToCtx === undefined ? {} : { addToCtx: stepResult.addToCtx }),
+    ...(stepResult.branches == null ? {} : { branches: enrichBranchRuns(stepResult.branches) }),
+  }))
 }
 
 function isPromise<T>(v: object): v is Promise<T> {
   return v && 'then' in v && typeof v.then === 'function'
 }
 
-function executeFlow<
-  InitialCtx extends object,
-  Ctx extends object,
-  Steps extends readonly StepDefinition<any, any, any, any>[] = [],
->(steps: Steps, initial: InitialCtx, mode: 'sync'): FlowResult<Steps, Ctx>
+function executeFlow<InitialCtx extends object, Ctx extends object, Steps extends readonly AnyStepDefinition[] = []>(
+  steps: Steps,
+  initial: InitialCtx,
+  mode: 'sync'
+): FlowResult<Steps, Ctx>
 
-function executeFlow<
-  InitialCtx extends object,
-  Ctx extends object,
-  Steps extends readonly StepDefinition<any, any, any, any>[] = [],
->(steps: Steps, initial: InitialCtx, mode: 'async'): Promise<FlowResult<Steps, Ctx>>
+function executeFlow<InitialCtx extends object, Ctx extends object, Steps extends readonly AnyStepDefinition[] = []>(
+  steps: Steps,
+  initial: InitialCtx,
+  mode: 'async'
+): Promise<FlowResult<Steps, Ctx>>
 
-function executeFlow<
-  InitialCtx extends object,
-  Ctx extends object,
-  Steps extends readonly StepDefinition<any, any, any, any>[] = [],
->(steps: Steps, initial: InitialCtx, mode: 'sync' | 'async'): unknown {
+function executeFlow<InitialCtx extends object, Ctx extends object, Steps extends readonly AnyStepDefinition[] = []>(
+  steps: Steps,
+  initial: InitialCtx,
+  mode: FlowMode
+): unknown {
   let ctx: Expand<Ctx> = { ...initial } as unknown as Expand<Ctx>
   const results: FlowResult<Steps, Ctx>['stepResults'] = []
   let hasFailure = false
 
-  const addCtx = <AddCtx extends object>(res: StepCtxResult<AddCtx, unknown>, stepId: StepIds<Steps>) => {
-    const nextEntries = Object.entries(res).filter(([key]) => key !== 'result' && key !== 'info' && key !== 'branches')
+  const getAddToCtx = <AddCtx extends object>(res: StepCtxResult<AddCtx, unknown>) =>
+    Object.fromEntries(
+      Object.entries(res).filter(([key]) => key !== 'result' && key !== 'info' && key !== 'branches')
+    ) as AddCtx
+
+  const addCtx = <AddCtx extends object>(addToCtx: AddCtx, stepId: string) => {
+    const nextEntries = Object.entries(addToCtx)
 
     for (const [key] of nextEntries) {
       if (key in ctx) {
@@ -341,7 +523,11 @@ function executeFlow<
     res: StepResult<AddCtx, unknown>
   ) => {
     if (canAddCtx(result, res)) {
-      addCtx(res, step.id)
+      const addToCtx = getAddToCtx(res)
+
+      if (Object.keys(addToCtx).length > 0) {
+        addCtx(addToCtx, step.id)
+      }
     }
 
     const ok = result !== 'error' && result !== 'exception'
@@ -356,6 +542,14 @@ function executeFlow<
 
     if (res.info !== undefined) {
       recordedResult.info = res.info as StepInfo<Step<Steps>>
+    }
+
+    if (canAddCtx(result, res)) {
+      const addToCtx = getAddToCtx(res)
+
+      if (Object.keys(addToCtx).length > 0) {
+        recordedResult.addToCtx = addToCtx as unknown as StepAddToCtx<Step<Steps>>
+      }
     }
 
     if (res.branches !== undefined) {
@@ -436,132 +630,150 @@ function executeFlow<
   })()
 }
 
-export class Flow<
-  InitialCtx extends object,
-  Ctx extends object,
-  Steps extends readonly StepDefinition<any, any, any, any>[] = [],
+class Flow<
+  StepDescription = string,
+  InitialCtx extends object = object,
+  Ctx extends object = InitialCtx,
+  Steps extends readonly StepDefinition<any, any, any, any, StepDescription>[] = [],
+  Mode extends FlowMode = FlowMode,
 > {
-  constructor(readonly steps: Steps) {}
+  constructor(
+    readonly steps: Steps,
+    private readonly mode: Mode
+  ) {}
 
-  run(initial: InitialCtx) {
-    return executeFlow<InitialCtx, Ctx, Steps>(this.steps, initial, 'sync')
+  run(initial: InitialCtx): FlowRunResult<Mode, Steps, Ctx> {
+    if (this.mode === 'sync') {
+      return executeFlow<InitialCtx, Ctx, Steps>(this.steps, initial, 'sync') as FlowRunResult<Mode, Steps, Ctx>
+    }
+
+    return executeFlow<InitialCtx, Ctx, Steps>(this.steps, initial, 'async') as FlowRunResult<Mode, Steps, Ctx>
   }
-}
 
-export class AsyncFlow<
-  InitialCtx extends object,
-  Ctx extends object,
-  Steps extends readonly StepDefinition<any, any, any, any>[] = [],
-> {
-  constructor(readonly steps: Steps) {}
+  enrichResult(result: FlowResult<Steps, Ctx>): EnrichedFlowResult<Steps, Ctx> {
+    assertSameFlowSteps(this.steps, result.steps)
 
-  run(initial: InitialCtx) {
-    return executeFlow<InitialCtx, Ctx, Steps>(this.steps, initial, 'async')
+    return new EnrichedFlowResult<Steps, Ctx>(
+      result.steps,
+      result.ok,
+      enrichStepResults(result.steps, result.stepResults),
+      result.finalCtx
+    )
   }
 }
 
 // --- Builder (Ctx evolves directly) ---
 
-export class FlowBuilder<
-  InitialCtx extends object,
-  Ctx extends object,
+class FlowBuilder<
+  StepDescription = string,
+  InitialCtx extends object = object,
+  Ctx extends object = InitialCtx,
   Info = unknown,
-  Steps extends readonly StepDefinition<any, any, any, any>[] = [],
+  Steps extends readonly StepDefinition<any, any, any, any, StepDescription>[] = [],
+  Mode extends FlowMode = FlowMode,
 > {
-  constructor(readonly steps: Steps) {}
-
-  step<Id extends string, Result>(id: Id, description: string, fn: (ctx: Expand<Ctx>) => SyncStepReturn<Result, Info>) {
-    type AddCtx = NoOverlap<NoReservedStepFields<StepAddedCtx<SyncStepReturn<Result, Info>>>, Ctx>
-
-    const newStep: StepDefinition<Id, Expand<Ctx>, AddCtx, Info> = {
-      id,
-      description,
-      fn: fn as StepFn<Expand<Ctx>, AddCtx, Info>,
-    }
-
-    return new FlowBuilder<InitialCtx, Expand<Ctx & AddCtx>, Info, [...Steps, typeof newStep]>([
-      ...this.steps,
-      newStep,
-    ] as [...Steps, typeof newStep])
-  }
-
-  branch<Id extends string, TBranches extends FlowBranches<Expand<Ctx>, FlowResult<any, any>>>(
-    id: Id,
-    select: (ctx: Expand<Ctx>) => BranchSelection<BranchKey<TBranches>>,
-    branches: TBranches
-  ) {
-    const newStep: StepDefinition<Id, Expand<Ctx>, Record<never, never>, Info> = {
-      id,
-      description: 'Branch',
-      fn: (ctx) => runBranchSync(id, ctx, select, branches),
-    }
-
-    return new FlowBuilder<InitialCtx, Ctx, Info, [...Steps, typeof newStep]>([...this.steps, newStep] as [
-      ...Steps,
-      typeof newStep,
-    ])
-  }
-
-  build() {
-    return new Flow<InitialCtx, Ctx, Steps>(this.steps)
-  }
-}
-
-export class AsyncFlowBuilder<
-  InitialCtx extends object,
-  Ctx extends object,
-  Info = unknown,
-  Steps extends readonly StepDefinition<any, any, any, any>[] = [],
-> {
-  constructor(readonly steps: Steps) {}
+  constructor(
+    readonly steps: Steps,
+    private readonly mode: Mode
+  ) {}
 
   step<Id extends string, Result>(
     id: Id,
-    description: string,
-    fn: (ctx: Expand<Ctx>) => AsyncStepReturn<Result, Info>
+    stepDescription: StepDescription,
+    fn: (ctx: Expand<Ctx>) => StepReturnByMode<Mode, Result, Info>
   ) {
-    type AddCtx = NoOverlap<NoReservedStepFields<StepAddedCtx<Awaited<AsyncStepReturn<Result, Info>>>>, Ctx>
+    type AddCtx = NoOverlap<NoReservedStepFields<StepAddedCtx<ResolvedStepReturn<Mode, Result, Info>>>, Ctx>
 
-    const newStep: StepDefinition<Id, Expand<Ctx>, AddCtx, Info> = {
+    const newStep: StepDefinition<Id, Expand<Ctx>, AddCtx, Info, StepDescription> = {
       id,
-      description,
+      description: stepDescription,
       fn: fn as StepFn<Expand<Ctx>, AddCtx, Info>,
     }
 
-    return new AsyncFlowBuilder<InitialCtx, Expand<Ctx & AddCtx>, Info, [...Steps, typeof newStep]>([
-      ...this.steps,
-      newStep,
-    ] as [...Steps, typeof newStep])
+    return new FlowBuilder<StepDescription, InitialCtx, Expand<Ctx & AddCtx>, Info, [...Steps, typeof newStep], Mode>(
+      [...this.steps, newStep] as [...Steps, typeof newStep],
+      this.mode
+    )
   }
 
-  branch<Id extends string, TBranches extends FlowBranches<Expand<Ctx>>>(
+  branch<
+    Id extends string,
+    TBranches extends Mode extends 'sync'
+      ? FlowBranchSources<Expand<Ctx>, StepDescription, FlowResult<any, any>>
+      : FlowBranchSources<Expand<Ctx>, StepDescription>,
+  >(
     id: Id,
+    stepDescription: StepDescription,
     select: (ctx: Expand<Ctx>) => BranchSelection<BranchKey<TBranches>>,
     branches: TBranches
   ) {
-    const newStep: StepDefinition<Id, Expand<Ctx>, Record<never, never>, Info> = {
+    const selectBranches = select as (ctx: Expand<Ctx>) => BranchSelection<string>
+    const normalizedBranches =
+      this.mode === 'sync'
+        ? normalizeFlowBranches(branches as FlowBranchSources<Expand<Ctx>, StepDescription, FlowResult<any, any>>)
+        : normalizeFlowBranches(branches as FlowBranchSources<Expand<Ctx>, StepDescription>)
+    const newStep: StepDefinition<Id, Expand<Ctx>, Record<never, never>, Info, StepDescription> = {
       id,
-      description: 'Branch',
-      fn: (ctx) => runBranchAsync(id, ctx, select, branches),
+      description: stepDescription,
+      fn:
+        this.mode === 'sync'
+          ? (ctx) =>
+              runBranchSync(
+                id,
+                ctx,
+                selectBranches,
+                normalizedBranches as FlowBranches<Expand<Ctx>, StepDescription, FlowResult<any, any>>
+              )
+          : (ctx) => runBranchAsync(id, ctx, selectBranches, normalizedBranches as FlowBranches<Expand<Ctx>, StepDescription>),
     }
 
-    return new AsyncFlowBuilder<InitialCtx, Ctx, Info, [...Steps, typeof newStep]>([...this.steps, newStep] as [
-      ...Steps,
-      typeof newStep,
-    ])
+    return new FlowBuilder<StepDescription, InitialCtx, Ctx, Info, [...Steps, typeof newStep], Mode>(
+      [...this.steps, newStep] as [...Steps, typeof newStep],
+      this.mode
+    )
   }
 
   build() {
-    return new AsyncFlow<InitialCtx, Ctx, Steps>(this.steps)
+    return new Flow<StepDescription, InitialCtx, Ctx, Steps, Mode>(this.steps, this.mode)
   }
 }
 
-// --- Factory ---
-
-export function createSync<Ctx extends object, Info = unknown>() {
-  return new FlowBuilder<Ctx, Ctx, Info>([])
+export function createSyncFlow<InitialCtx extends object, Info = unknown>(): FlowBuilder<
+  string,
+  InitialCtx,
+  InitialCtx,
+  Info,
+  [],
+  'sync'
+>
+export function createSyncFlow<StepDescription, InitialCtx extends object, Info = unknown>(): FlowBuilder<
+  StepDescription,
+  InitialCtx,
+  InitialCtx,
+  Info,
+  [],
+  'sync'
+>
+export function createSyncFlow<StepDescription = string, InitialCtx extends object = object, Info = unknown>() {
+  return new FlowBuilder<StepDescription, InitialCtx, InitialCtx, Info, [], 'sync'>([], 'sync')
 }
 
-export function createAsync<Ctx extends object, Info = unknown>() {
-  return new AsyncFlowBuilder<Ctx, Ctx, Info>([])
+export function createAsyncFlow<InitialCtx extends object, Info = unknown>(): FlowBuilder<
+  string,
+  InitialCtx,
+  InitialCtx,
+  Info,
+  [],
+  'async'
+>
+export function createAsyncFlow<StepDescription, InitialCtx extends object, Info = unknown>(): FlowBuilder<
+  StepDescription,
+  InitialCtx,
+  InitialCtx,
+  Info,
+  [],
+  'async'
+>
+export function createAsyncFlow<StepDescription = string, InitialCtx extends object = object, Info = unknown>() {
+  return new FlowBuilder<StepDescription, InitialCtx, InitialCtx, Info, [], 'async'>([], 'async')
 }

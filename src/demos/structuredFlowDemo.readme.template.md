@@ -4,32 +4,36 @@ Need to manage hundreds of business logic validation rules in code? Tired of sca
 structured-flow helps you structure logic and visualize execution.
 
 <!-- TOC -->
-* [structured-flow](#structured-flow)
-* [Structured Flow API Example](#structured-flow-api-example)
-  * [Flow And Step Execution](#flow-and-step-execution)
-  * [Flow](#flow)
-  * [Static Graph](#static-graph)
-  * [Passing Demo](#passing-demo)
-  * [Failing Demo](#failing-demo)
-  * [Stop Demo](#stop-demo)
-  * [Exception Demo](#exception-demo)
-* [branch() examples](#branch-examples)
-  * [One Of Three Branches](#one-of-three-branches)
-  * [Two Of Three Branches](#two-of-three-branches)
-  * [Nested Branch](#nested-branch)
-  * [Skipped Branch](#skipped-branch)
-<!-- TOC -->
+
+- [structured-flow](#structured-flow)
+- [Structured Flow API Example](#structured-flow-api-example)
+  - [Flow And Step Execution](#flow-and-step-execution)
+  - [Code examples](#code-examples)
+    - [Structured StepDescription](#structured-stepdescription)
+    - [Step results and execution visualized](#step-results-and-execution-visualized)
+      - [Flow](#flow)
+      - [Static Graph](#static-graph)
+      - [Passing Demo](#passing-demo)
+      - [Failing Demo](#failing-demo)
+      - [Stop Demo](#stop-demo)
+      - [Exception Demo](#exception-demo)
+    - [branch() examples](#branch-examples)
+      - [One Of Three Branches](#one-of-three-branches)
+      - [Two Of Three Branches](#two-of-three-branches)
+      - [Nested Branch](#nested-branch)
+      - [Skipped Branch](#skipped-branch)
+  <!-- TOC -->
 
 # Structured Flow API Example
 
 This example shows the intended flow of the sequence API and two concrete runs of the same sequence.
 
-- `createSyncFlow<Ctx, Info>()` starts a builder that accepts only synchronous step functions.
-- `createAsyncFlow<Ctx, Info>()` starts a builder that accepts synchronous or async step functions.
-- `.step(id, description, fn)` appends a step that can extend ctx and return structured step results.
-- `.branch(id, select, branches)` appends a branch step that runs one or more child flows selected from `branches`.
+- `createSyncFlow<StepDescription, InitialCtx, Info>()` starts a builder that accepts only synchronous step functions. `StepDescription` defaults to `string`.
+- `createAsyncFlow<StepDescription, InitialCtx, Info>()` starts a builder that accepts synchronous or async step functions. `StepDescription` defaults to `string`.
+- `.step(id, stepDescription, fn)` appends a step that can extend ctx and return structured step results.
+- `.branch(id, stepDescription, select, branches)` appends a branch step that runs one or more child flows selected from `branches`.
 - `.build()` returns a sequence with a single `run()` method.
-- `FlowResult` contains the accumulated ctx, per-step results, and helper methods like `failedStepIds()`.
+- `FlowResult` contains the `finalCtx`, per-step results, and helper methods like `failedStepIds()`.
 - `renderProcessAsMermaidGraph(...)` can render a builder, sequence, or executed sequence result.
 
 ## Flow And Step Execution
@@ -39,11 +43,11 @@ For a sequence built with `createSyncFlow()`, `run(initialCtx)` executes immedia
 returns `Promise<FlowResult>`.
 
 When a sequence starts, it copies the initial context and executes steps in order. Each step function receives the
-current accumulated context and returns a structured step result object. That return object can contain:
+current context and returns a structured step result object. That return object can contain:
 
 - `result` to control execution flow
 - `info` to record step metadata into `stepResults`
-- additional fields that are merged into the context only when the result is `ok` or `stop`
+- additional fields that are recorded as `addToCtx` and merged into `finalCtx` only when the result is `ok` or `stop`
 
 Execution continues through `ok`, `error`, and explicit `skip` results. Execution stops early on `stop` or
 `exception`, and all remaining steps are recorded as `skip`. If a step throws, the sequence catches it, records that
@@ -58,66 +62,82 @@ the parent step result's `branches` array.
 The table below summarizes how each recorded `result` value affects execution and context updates:
 
 | Result value | Step executed | Flow continues | Returned fields added to context | Remaining steps auto-recorded as `skip` |
-|--------------|---------------|----------------|----------------------------------|-----------------------------------------|
+| ------------ | ------------- | -------------- | -------------------------------- | --------------------------------------- |
 | `ok`         | yes           | yes            | yes                              | no                                      |
 | `error`      | yes           | yes            | no                               | no                                      |
 | `stop`       | yes           | no             | yes                              | yes                                     |
 | `exception`  | yes           | no             | no                               | yes                                     |
 | `skip`       | sometimes     | yes            | no                               | no                                      |
 
-## Flow
+# Code examples
+
+## Structured StepDescription
+
+This example uses an object-valued `StepDescription` for both `step()` and `branch()`.
+
+{{STRUCTURED_STEP_DESCRIPTION_CODE_BLOCK}}
+
+<p><strong>Internal flow configuration JSON</strong></p>
+
+{{STRUCTURED_STEP_DESCRIPTION_FLOW_JSON}}
+
+{{STRUCTURED_STEP_DESCRIPTION_DEMO_SECTION}}
+
+## Step results and execution visualized
+
+### Flow
 
 {{SEQUENCE_CODE_BLOCK}}
 
-## Static Graph
+### Static Graph
 
 {{STATIC_GRAPH_SECTION}}
 
-## Passing Demo
+### Passing Demo
 
 {{PASSING_DEMO_SECTION}}
 
-## Failing Demo
+### Failing Demo
 
 {{FAILING_DEMO_SECTION}}
 
-## Stop Demo
+### Stop Demo
 
 {{STOP_DEMO_SECTION}}
 
-## Exception Demo
+### Exception Demo
 
 {{EXCEPTION_DEMO_SECTION}}
 
-# branch() examples
+## branch() examples
 
-## One Of Three Branches
+### One Of Three Branches
 
-This run selects exactly one branch from three branches.
+Select one branch from three.
 
 {{BRANCH_ONE_OF_THREE_CODE_BLOCK}}
 
 {{BRANCH_ONE_OF_THREE_DEMO_SECTION}}
 
-## Two Of Three Branches
+### Two Of Three Branches
 
-This run selects two branches from three branches and records each branch result separately.
+Select two branches and record each result.
 
 {{BRANCH_TWO_OF_THREE_CODE_BLOCK}}
 
 {{BRANCH_TWO_OF_THREE_DEMO_SECTION}}
 
-## Nested Branch
+### Nested Branch
 
-This run selects `B` from the first branch step, then selects `D` from the nested branch inside `B`.
+Select `B`, then `D` inside `B`.
 
 {{NESTED_BRANCH_CODE_BLOCK}}
 
 {{NESTED_BRANCH_DEMO_SECTION}}
 
-## Skipped Branch
+### Skipped Branch
 
-This run returns `skip` directly from the selector, so no child branch flow is executed.
+Return `skip` directly from the selector.
 
 {{BRANCH_SKIP_CODE_BLOCK}}
 

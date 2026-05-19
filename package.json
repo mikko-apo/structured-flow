@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "bundle": "src/",
-    "build": "npm run lint && npm run typecheck && npm run bundle && npm run format",
+    "bundle": "rimraf dist && tsc -p .",
+    "update-readme": "jiti src/demos/updateReadme.ts",
+    "build": "npm run lint && npm run typecheck && npm run update-readme && npm run bundle && npm run format",
     "dev": "tsc -w -p .",
     "format": "prettier --write .",
     "lint": "eslint",

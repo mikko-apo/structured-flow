@@ -54,6 +54,21 @@ describe('updateReadme branch rendering', () => {
       '<!-- structured-process-demo:nested-branch-demo:html-table:start -->',
       '<!-- structured-process-demo:nested-branch-demo:html-table:end -->'
     )
+    const structuredStepDescriptionTable = sliceBetween(
+      markdown,
+      '<!-- structured-process-demo:structured-step-description-demo:html-table:start -->',
+      '<!-- structured-process-demo:structured-step-description-demo:html-table:end -->'
+    )
+    const structuredStepDescriptionResult = sliceBetween(
+      markdown,
+      '<!-- structured-process-demo:structured-step-description-demo-result:json:start -->',
+      '<!-- structured-process-demo:structured-step-description-demo-result:json:end -->'
+    )
+    const structuredStepDescriptionFlowJson = sliceBetween(
+      markdown,
+      '<!-- structured-process-demo:structured-step-description-flow-json:json:start -->',
+      '<!-- structured-process-demo:structured-step-description-flow-json:json:end -->'
+    )
 
     expect(branchMermaid).toContain('ROUTE:')
     expect(branchMermaid).toContain('branches: expense')
@@ -76,7 +91,7 @@ describe('updateReadme branch rendering', () => {
     expect(branchTable).toContain('Check fraud')
     expect(branchTable).toContain('POLICY-1')
     expect(branchTable).toContain('Check policy')
-    expect(branchTable).toContain('Ctx:')
+    expect(branchTable).toContain('Final ctx:')
     expect(branchTable).toContain('taxChecked')
     expect(branchTable).toContain('Fraud review failed.')
     expect(nestedBranchMermaid).toContain('ROOT-ROUTE:')
@@ -94,5 +109,12 @@ describe('updateReadme branch rendering', () => {
     expect(nestedBranchTable).toContain('B-ROUTE')
     expect(nestedBranchTable).toContain('D-1: Handle D')
     expect(nestedBranchTable).toContain('visitedD')
+    expect(structuredStepDescriptionTable).toContain('&quot;label&quot;:&quot;Validate amount&quot;')
+    expect(structuredStepDescriptionTable).toContain('&quot;label&quot;:&quot;Route review&quot;')
+    expect(structuredStepDescriptionResult).toContain('queuedForReview')
+    expect(structuredStepDescriptionFlowJson).toContain('&quot;mode&quot;: &quot;sync&quot;')
+    expect(structuredStepDescriptionFlowJson).toContain('&quot;fn&quot;: {')
+    expect(structuredStepDescriptionFlowJson).toContain('&quot;kind&quot;: &quot;arrow-function&quot;')
+    expect(structuredStepDescriptionFlowJson).toContain('&quot;bodyPreview&quot;:')
   })
 })

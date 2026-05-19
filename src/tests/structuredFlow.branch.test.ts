@@ -1,23 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
-import { createAsync, createSync, stepResult } from '../structuredFlow'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
 
 describe('FlowBuilder.branch', () => {
   it('runs a selected sync branch and keeps child ctx out of the parent flow ctx', () => {
-    const approvedFlow = createSync<{ amount: number; route: 'approved' | 'rejected' }>()
+    const approvedFlow = createSyncFlow<{ amount: number; route: 'approved' | 'rejected' }>()
       .step('APP-1', 'Approve request', ({ amount }) => ({
         approvedTotal: amount + 1,
       }))
-      .build()
 
-    const rejectedFlow = createSync<{ amount: number; route: 'approved' | 'rejected' }>()
+    const rejectedFlow = createSyncFlow<{ amount: number; route: 'approved' | 'rejected' }>()
       .step('REJ-1', 'Reject request', () => ({
         rejectionCode: 'manual-review',
       }))
-      .build()
 
-    const flow = createSync<{ amount: number; route: 'approved' | 'rejected' }>()
-      .branch('BR-1', ({ route }) => route, {
+    const flow = createSyncFlow<{ amount: number; route: 'approved' | 'rejected' }>()
+      .branch('BR-1', 'Route request', ({ route }) => route, {
         approved: approvedFlow,
         rejected: rejectedFlow,
       })
@@ -28,8 +26,9 @@ describe('FlowBuilder.branch', () => {
 
     const result = flow.run({ amount: 4, route: 'approved' })
 
+    expect(flow.steps[0]).toMatchObject({ id: 'BR-1', description: 'Route request' })
     expect(result.ok).toBe(true)
-    expect(result.ctx).toEqual({
+    expect(result.finalCtx).toEqual({
       amount: 4,
       route: 'approved',
       parentCompleted: true,
@@ -42,18 +41,18 @@ describe('FlowBuilder.branch', () => {
           {
             key: 'approved',
             result: 'ok',
-            ctx: {
+            finalCtx: {
               amount: 4,
               route: 'approved',
               approvedTotal: 5,
             },
             steps: [{ id: 'APP-1', description: 'Approve request' }],
-            stepResults: [{ id: 'APP-1', result: 'ok' }],
+            stepResults: [{ id: 'APP-1', result: 'ok', addToCtx: { approvedTotal: 5 } }],
           },
           {
             key: 'rejected',
             result: 'skip',
-            ctx: {
+            finalCtx: {
               amount: 4,
               route: 'approved',
             },
@@ -65,14 +64,15 @@ describe('FlowBuilder.branch', () => {
       {
         id: 'AFTER',
         result: 'ok',
+        addToCtx: { parentCompleted: true },
       },
     ])
   })
 
   it('supports direct status selection without running branch flows', () => {
-    const flow = createSync<{ shouldStop: boolean }>()
-      .branch('BR-STOP', ({ shouldStop }) => (shouldStop ? 'stop' : 'ok'), {
-        active: createSync<{ shouldStop: boolean }>()
+    const flow = createSyncFlow<{ shouldStop: boolean }>()
+      .branch('BR-STOP', 'Optional branch stop', ({ shouldStop }) => (shouldStop ? 'stop' : 'ok'), {
+        active: createSyncFlow<{ shouldStop: boolean }>()
           .step('ACTIVE-1', 'Should not run', () => ({ touched: true }))
           .build(),
       })
@@ -92,7 +92,7 @@ describe('FlowBuilder.branch', () => {
           {
             key: 'active',
             result: 'skip',
-            ctx: {
+            finalCtx: {
               shouldStop: true,
             },
             steps: [{ id: 'ACTIVE-1', description: 'Should not run' }],
@@ -105,18 +105,18 @@ describe('FlowBuilder.branch', () => {
         result: 'skip',
       },
     ])
-    expect(result.ctx).toEqual({ shouldStop: true })
+    expect(result.finalCtx).toEqual({ shouldStop: true })
   })
 
   it('fails the branch step when the selector returns an unknown flow key', () => {
-    const knownFlow = createSync<{ route: string }>()
+    const knownFlow = createSyncFlow<{ route: string }>()
       .step('KNOWN-1', 'Known path', () => ({
         seenKnown: true,
       }))
       .build()
 
-    const flow = createSync<{ route: string }>()
-      .branch('BR-FAIL', ({ route }) => route as 'known', {
+    const flow = createSyncFlow<{ route: string }>()
+      .branch('BR-FAIL', 'Fail unknown route', ({ route }) => route as 'known', {
         known: knownFlow,
       })
       .step('AFTER', 'Skipped after branch exception', () => ({
@@ -140,29 +140,31 @@ describe('FlowBuilder.branch', () => {
   })
 
   it('runs multiple async branches and records each branch result separately', async () => {
-    const auditFlow = createAsync<{ mode: 'all'; amount: number }>()
+    const auditFlow = createAsyncFlow<{ mode: 'all'; amount: number }>()
       .step('AUDIT-1', 'Audit request', async () => ({ audited: true }))
-      .build()
 
-    const rulesFlow = createAsync<{ mode: 'all'; amount: number }, string>()
+    const rulesFlow = createAsyncFlow<{ mode: 'all'; amount: number }, string>()
       .step('RULES-1', 'Check rules', async () =>
         stepResult({
           result: 'error',
           info: 'Rules rejected the request.',
         })
       )
-      .build()
 
-    const policyFlow = createAsync<{ mode: 'all'; amount: number }>()
+    const policyFlow = createAsyncFlow<{ mode: 'all'; amount: number }>()
       .step('POLICY-1', 'Check policy', async () => ({ policyChecked: true }))
-      .build()
 
-    const flow = createAsync<{ mode: 'all'; amount: number }>()
-      .branch('BR-MULTI', ({ mode }) => (mode === 'all' ? (['audit', 'rules'] as const) : 'ok'), {
-        audit: auditFlow,
-        rules: rulesFlow,
-        policy: policyFlow,
-      })
+    const flow = createAsyncFlow<{ mode: 'all'; amount: number }>()
+      .branch(
+        'BR-MULTI',
+        'Run selected reviews',
+        ({ mode }) => (mode === 'all' ? (['audit', 'rules'] as const) : 'ok'),
+        {
+          audit: auditFlow,
+          rules: rulesFlow,
+          policy: policyFlow,
+        }
+      )
       .step('AFTER', 'Parent flow continues after branch errors', async () => ({
         reviewed: true,
       }))
@@ -171,7 +173,7 @@ describe('FlowBuilder.branch', () => {
     const result = await flow.run({ mode: 'all', amount: 8 })
 
     expect(result.ok).toBe(false)
-    expect(result.ctx).toEqual({
+    expect(result.finalCtx).toEqual({
       mode: 'all',
       amount: 8,
       reviewed: true,
@@ -184,18 +186,18 @@ describe('FlowBuilder.branch', () => {
           {
             key: 'audit',
             result: 'ok',
-            ctx: {
+            finalCtx: {
               mode: 'all',
               amount: 8,
               audited: true,
             },
             steps: [{ id: 'AUDIT-1', description: 'Audit request' }],
-            stepResults: [{ id: 'AUDIT-1', result: 'ok' }],
+            stepResults: [{ id: 'AUDIT-1', result: 'ok', addToCtx: { audited: true } }],
           },
           {
             key: 'rules',
             result: 'error',
-            ctx: {
+            finalCtx: {
               mode: 'all',
               amount: 8,
             },
@@ -211,7 +213,7 @@ describe('FlowBuilder.branch', () => {
           {
             key: 'policy',
             result: 'skip',
-            ctx: {
+            finalCtx: {
               mode: 'all',
               amount: 8,
             },
@@ -223,17 +225,18 @@ describe('FlowBuilder.branch', () => {
       {
         id: 'AFTER',
         result: 'ok',
+        addToCtx: { reviewed: true },
       },
     ])
   })
 
   it('treats an empty branch key array as an exception and skips remaining steps', () => {
-    const flow = createSync<{ runChecks: boolean }>()
-      .branch('BR-EMPTY', () => [], {
-        audit: createSync<{ runChecks: boolean }>()
+    const flow = createSyncFlow<{ runChecks: boolean }>()
+      .branch('BR-EMPTY', 'No selected checks', () => [], {
+        audit: createSyncFlow<{ runChecks: boolean }>()
           .step('AUDIT-1', 'Audit', () => ({ audited: true }))
           .build(),
-        fraud: createSync<{ runChecks: boolean }>()
+        fraud: createSyncFlow<{ runChecks: boolean }>()
           .step('FRAUD-1', 'Fraud', () => ({ fraudChecked: true }))
           .build(),
       })
@@ -253,9 +256,9 @@ describe('FlowBuilder.branch', () => {
   })
 
   it('fails async branch steps when the selector returns an unknown flow key', async () => {
-    const flow = createAsync<{ route: string }>()
-      .branch('BR-ASYNC-FAIL', ({ route }) => route as 'known', {
-        known: createAsync<{ route: string }>()
+    const flow = createAsyncFlow<{ route: string }>()
+      .branch('BR-ASYNC-FAIL', 'Fail async route', ({ route }) => route as 'known', {
+        known: createAsyncFlow<{ route: string }>()
           .step('KNOWN-1', 'Known path', async () => ({ seenKnown: true }))
           .build(),
       })
@@ -275,11 +278,11 @@ describe('FlowBuilder.branch', () => {
   })
 
   it('uses the most severe branch status as the parent branch result', async () => {
-    const okFlow = createAsync<{ mode: 'all' }>()
+    const okFlow = createAsyncFlow<{ mode: 'all' }>()
       .step('OK-1', 'Ok branch', async () => ({ okSeen: true }))
       .build()
 
-    const stopFlow = createAsync<{ mode: 'all' }, string>()
+    const stopFlow = createAsyncFlow<{ mode: 'all' }, string>()
       .step('STOP-1', 'Stop branch', async () =>
         stepResult({
           result: 'stop',
@@ -289,7 +292,7 @@ describe('FlowBuilder.branch', () => {
       )
       .build()
 
-    const exceptionFlow = createAsync<{ mode: 'all' }, string>()
+    const exceptionFlow = createAsyncFlow<{ mode: 'all' }, string>()
       .step('EX-1', 'Exception branch', async () =>
         stepResult({
           result: 'exception',
@@ -298,8 +301,8 @@ describe('FlowBuilder.branch', () => {
       )
       .build()
 
-    const flow = createAsync<{ mode: 'all' }>()
-      .branch('BR-SEVERITY', () => ['ok', 'stop', 'exception'] as const, {
+    const flow = createAsyncFlow<{ mode: 'all' }>()
+      .branch('BR-SEVERITY', 'Run all branches', () => ['ok', 'stop', 'exception'] as const, {
         ok: okFlow,
         stop: stopFlow,
         exception: exceptionFlow,
@@ -318,27 +321,27 @@ describe('FlowBuilder.branch', () => {
           {
             key: 'ok',
             result: 'ok',
-            ctx: {
+            finalCtx: {
               mode: 'all',
               okSeen: true,
             },
             steps: [{ id: 'OK-1', description: 'Ok branch' }],
-            stepResults: [{ id: 'OK-1', result: 'ok' }],
+            stepResults: [{ id: 'OK-1', result: 'ok', addToCtx: { okSeen: true } }],
           },
           {
             key: 'stop',
             result: 'stop',
-            ctx: {
+            finalCtx: {
               mode: 'all',
               stopped: true,
             },
             steps: [{ id: 'STOP-1', description: 'Stop branch' }],
-            stepResults: [{ id: 'STOP-1', result: 'stop', info: 'Branch stopped early.' }],
+            stepResults: [{ id: 'STOP-1', result: 'stop', info: 'Branch stopped early.', addToCtx: { stopped: true } }],
           },
           {
             key: 'exception',
             result: 'exception',
-            ctx: {
+            finalCtx: {
               mode: 'all',
             },
             steps: [{ id: 'EX-1', description: 'Exception branch' }],
@@ -350,16 +353,16 @@ describe('FlowBuilder.branch', () => {
   })
 
   it('records branch ctx and result for zero-step child flows', () => {
-    const emptyFlow = createSync<{ route: 'empty' | 'normal' }>().build()
+    const emptyFlow = createSyncFlow<{ route: 'empty' | 'normal' }>().build()
 
-    const normalFlow = createSync<{ route: 'empty' | 'normal' }>()
+    const normalFlow = createSyncFlow<{ route: 'empty' | 'normal' }>()
       .step('NORMAL-1', 'Normal path', () => ({
         seenNormal: true,
       }))
       .build()
 
-    const flow = createSync<{ route: 'empty' | 'normal' }>()
-      .branch('BR-ZERO', ({ route }) => route, {
+    const flow = createSyncFlow<{ route: 'empty' | 'normal' }>()
+      .branch('BR-ZERO', 'Route branch', ({ route }) => route, {
         empty: emptyFlow,
         normal: normalFlow,
       })
@@ -376,7 +379,7 @@ describe('FlowBuilder.branch', () => {
           {
             key: 'empty',
             result: 'ok',
-            ctx: {
+            finalCtx: {
               route: 'empty',
             },
             steps: [],
@@ -385,7 +388,7 @@ describe('FlowBuilder.branch', () => {
           {
             key: 'normal',
             result: 'skip',
-            ctx: {
+            finalCtx: {
               route: 'empty',
             },
             steps: [{ id: 'NORMAL-1', description: 'Normal path' }],
@@ -397,12 +400,12 @@ describe('FlowBuilder.branch', () => {
   })
 
   it('reports branch-produced failures through failedStepIds()', async () => {
-    const flow = createAsync<{ checks: string[] }>()
-      .branch('BR-FAILED-IDS', () => ['audit', 'rules'] as const, {
-        audit: createAsync<{ checks: string[] }>()
+    const flow = createAsyncFlow<{ checks: string[] }>()
+      .branch('BR-FAILED-IDS', 'Run selected branches', () => ['audit', 'rules'] as const, {
+        audit: createAsyncFlow<{ checks: string[] }>()
           .step('AUDIT-1', 'Audit', async () => ({ audited: true }))
           .build(),
-        rules: createAsync<{ checks: string[] }, string>()
+        rules: createAsyncFlow<{ checks: string[] }, string>()
           .step('RULES-1', 'Rules', async () =>
             stepResult({
               result: 'error',
@@ -424,6 +427,7 @@ describe('FlowBuilder.branch', () => {
     expect(result.stepResults[1]).toEqual({
       id: 'AFTER',
       result: 'ok',
+      addToCtx: { reached: true },
     })
   })
 })

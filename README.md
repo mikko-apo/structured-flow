@@ -4,32 +4,36 @@ Need to manage hundreds of business logic validation rules in code? Tired of sca
 structured-flow helps you structure logic and visualize execution.
 
 <!-- TOC -->
-* [structured-flow](#structured-flow)
-* [Structured Flow API Example](#structured-flow-api-example)
-  * [Flow And Step Execution](#flow-and-step-execution)
-  * [Flow](#flow)
-  * [Static Graph](#static-graph)
-  * [Passing Demo](#passing-demo)
-  * [Failing Demo](#failing-demo)
-  * [Stop Demo](#stop-demo)
-  * [Exception Demo](#exception-demo)
-* [branch() examples](#branch-examples)
-  * [One Of Three Branches](#one-of-three-branches)
-  * [Two Of Three Branches](#two-of-three-branches)
-  * [Nested Branch](#nested-branch)
-  * [Skipped Branch](#skipped-branch)
-<!-- TOC -->
+
+- [structured-flow](#structured-flow)
+- [Structured Flow API Example](#structured-flow-api-example)
+  - [Flow And Step Execution](#flow-and-step-execution)
+  - [Code examples](#code-examples)
+    - [Structured StepDescription](#structured-stepdescription)
+    - [Step results and execution visualized](#step-results-and-execution-visualized)
+      - [Flow](#flow)
+      - [Static Graph](#static-graph)
+      - [Passing Demo](#passing-demo)
+      - [Failing Demo](#failing-demo)
+      - [Stop Demo](#stop-demo)
+      - [Exception Demo](#exception-demo)
+    - [branch() examples](#branch-examples)
+      - [One Of Three Branches](#one-of-three-branches)
+      - [Two Of Three Branches](#two-of-three-branches)
+      - [Nested Branch](#nested-branch)
+      - [Skipped Branch](#skipped-branch)
+  <!-- TOC -->
 
 # Structured Flow API Example
 
 This example shows the intended flow of the sequence API and two concrete runs of the same sequence.
 
-- `createSyncFlow<Ctx, Info>()` starts a builder that accepts only synchronous step functions.
-- `createAsyncFlow<Ctx, Info>()` starts a builder that accepts synchronous or async step functions.
-- `.step(id, description, fn)` appends a step that can extend ctx and return structured step results.
-- `.branch(id, select, branches)` appends a branch step that runs one or more child flows selected from `branches`.
+- `createSyncFlow<StepDescription, InitialCtx, Info>()` starts a builder that accepts only synchronous step functions. `StepDescription` defaults to `string`.
+- `createAsyncFlow<StepDescription, InitialCtx, Info>()` starts a builder that accepts synchronous or async step functions. `StepDescription` defaults to `string`.
+- `.step(id, stepDescription, fn)` appends a step that can extend ctx and return structured step results.
+- `.branch(id, stepDescription, select, branches)` appends a branch step that runs one or more child flows selected from `branches`.
 - `.build()` returns a sequence with a single `run()` method.
-- `FlowResult` contains the accumulated ctx, per-step results, and helper methods like `failedStepIds()`.
+- `FlowResult` contains the `finalCtx`, per-step results, and helper methods like `failedStepIds()`.
 - `renderProcessAsMermaidGraph(...)` can render a builder, sequence, or executed sequence result.
 
 ## Flow And Step Execution
@@ -39,11 +43,11 @@ For a sequence built with `createSyncFlow()`, `run(initialCtx)` executes immedia
 returns `Promise<FlowResult>`.
 
 When a sequence starts, it copies the initial context and executes steps in order. Each step function receives the
-current accumulated context and returns a structured step result object. That return object can contain:
+current context and returns a structured step result object. That return object can contain:
 
 - `result` to control execution flow
 - `info` to record step metadata into `stepResults`
-- additional fields that are merged into the context only when the result is `ok` or `stop`
+- additional fields that are recorded as `addToCtx` and merged into `finalCtx` only when the result is `ok` or `stop`
 
 Execution continues through `ok`, `error`, and explicit `skip` results. Execution stops early on `stop` or
 `exception`, and all remaining steps are recorded as `skip`. If a step throws, the sequence catches it, records that
@@ -58,14 +62,281 @@ the parent step result's `branches` array.
 The table below summarizes how each recorded `result` value affects execution and context updates:
 
 | Result value | Step executed | Flow continues | Returned fields added to context | Remaining steps auto-recorded as `skip` |
-|--------------|---------------|----------------|----------------------------------|-----------------------------------------|
+| ------------ | ------------- | -------------- | -------------------------------- | --------------------------------------- |
 | `ok`         | yes           | yes            | yes                              | no                                      |
 | `error`      | yes           | yes            | no                               | no                                      |
 | `stop`       | yes           | no             | yes                              | yes                                     |
 | `exception`  | yes           | no             | no                               | yes                                     |
 | `skip`       | sometimes     | yes            | no                               | no                                      |
 
-## Flow
+# Code examples
+
+## Structured StepDescription
+
+This example uses an object-valued `StepDescription` for both `step()` and `branch()`.
+
+```ts
+type StepMeta = {
+  label: string
+  area: 'billing' | 'risk'
+  severity: 'low' | 'high'
+}
+
+const autoReviewFlow = createSyncFlow<StepMeta, { amount: number; normalizedAmount: number }, unknown>().step(
+  'AUTO-1',
+  { label: 'Auto approve', area: 'risk', severity: 'low' },
+  () => ({
+    autoApproved: true,
+  })
+)
+
+const manualReviewFlow = createSyncFlow<StepMeta, { amount: number; normalizedAmount: number }, unknown>().step(
+  'MANUAL-1',
+  { label: 'Manual review', area: 'risk', severity: 'high' },
+  () => ({
+    queuedForReview: true,
+  })
+)
+
+const structuredStepDescriptionFlow = createSyncFlow<StepMeta, { amount: number }, unknown>()
+  .step('VALIDATE', { label: 'Validate amount', area: 'billing', severity: 'high' }, ({ amount }) => ({
+    normalizedAmount: Math.abs(amount),
+  }))
+  .branch(
+    'ROUTE',
+    { label: 'Route review', area: 'risk', severity: 'low' },
+    ({ normalizedAmount }) => (normalizedAmount > 1000 ? 'manual' : 'auto'),
+    {
+      auto: autoReviewFlow,
+      manual: manualReviewFlow,
+    }
+  )
+  .build()
+```
+
+<p><strong>Internal flow configuration JSON</strong></p>
+
+<!-- structured-process-demo:structured-step-description-flow-json:json:start -->
+<pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
+<code>{
+  &quot;steps&quot;: [
+    {
+      &quot;id&quot;: &quot;VALIDATE&quot;,
+      &quot;description&quot;: {
+        &quot;label&quot;: &quot;Validate amount&quot;,
+        &quot;area&quot;: &quot;billing&quot;,
+        &quot;severity&quot;: &quot;high&quot;
+      },
+      &quot;fn&quot;: {
+        &quot;kind&quot;: &quot;arrow-function&quot;,
+        &quot;async&quot;: false,
+        &quot;params&quot;: &quot;({ amount })&quot;,
+        &quot;bodyPreview&quot;: &quot;({ normalizedAmount: Math.abs(amount) })&quot;
+      }
+    },
+    {
+      &quot;id&quot;: &quot;ROUTE&quot;,
+      &quot;description&quot;: {
+        &quot;label&quot;: &quot;Route review&quot;,
+        &quot;area&quot;: &quot;risk&quot;,
+        &quot;severity&quot;: &quot;low&quot;
+      },
+      &quot;fn&quot;: {
+        &quot;kind&quot;: &quot;arrow-function&quot;,
+        &quot;async&quot;: false,
+        &quot;params&quot;: &quot;(ctx)&quot;,
+        &quot;bodyPreview&quot;: &quot;runBranchSync( id, ctx, selectBranches, normalizedBranches )&quot;
+      }
+    }
+  ],
+  &quot;mode&quot;: &quot;sync&quot;
+}</code>
+</pre>
+<!-- structured-process-demo:structured-step-description-flow-json:json:end -->
+
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
+
+<p><strong>Initial JSON parameter</strong></p>
+<!-- structured-process-demo:structured-step-description-demo-init:json:start -->
+<pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
+<code>{
+  &quot;amount&quot;: -1400
+}</code>
+</pre>
+<!-- structured-process-demo:structured-step-description-demo-init:json:end -->
+
+<p><strong>Resulting JSON</strong></p>
+<!-- structured-process-demo:structured-step-description-demo-result:json:start -->
+<pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
+<code>{
+  &quot;ok&quot;: true,
+  &quot;failedStepIds&quot;: [],
+  &quot;stepResults&quot;: [
+    {
+      &quot;id&quot;: &quot;VALIDATE&quot;,
+      &quot;result&quot;: &quot;ok&quot;,
+      &quot;addToCtx&quot;: {
+        &quot;normalizedAmount&quot;: 1400
+      }
+    },
+    {
+      &quot;id&quot;: &quot;ROUTE&quot;,
+      &quot;result&quot;: &quot;ok&quot;,
+      &quot;branches&quot;: [
+        {
+          &quot;key&quot;: &quot;manual&quot;,
+          &quot;result&quot;: &quot;ok&quot;,
+          &quot;finalCtx&quot;: {
+            &quot;amount&quot;: -1400,
+            &quot;normalizedAmount&quot;: 1400,
+            &quot;queuedForReview&quot;: true
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;MANUAL-1&quot;,
+              &quot;description&quot;: {
+                &quot;label&quot;: &quot;Manual review&quot;,
+                &quot;area&quot;: &quot;risk&quot;,
+                &quot;severity&quot;: &quot;high&quot;
+              }
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;MANUAL-1&quot;,
+              &quot;result&quot;: &quot;ok&quot;,
+              &quot;addToCtx&quot;: {
+                &quot;queuedForReview&quot;: true
+              }
+            }
+          ]
+        },
+        {
+          &quot;key&quot;: &quot;auto&quot;,
+          &quot;result&quot;: &quot;skip&quot;,
+          &quot;finalCtx&quot;: {
+            &quot;amount&quot;: -1400,
+            &quot;normalizedAmount&quot;: 1400
+          },
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;AUTO-1&quot;,
+              &quot;description&quot;: {
+                &quot;label&quot;: &quot;Auto approve&quot;,
+                &quot;area&quot;: &quot;risk&quot;,
+                &quot;severity&quot;: &quot;low&quot;
+              }
+            }
+          ],
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;AUTO-1&quot;,
+              &quot;result&quot;: &quot;skip&quot;
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  &quot;finalCtx&quot;: {
+    &quot;amount&quot;: -1400,
+    &quot;normalizedAmount&quot;: 1400
+  }
+}</code>
+</pre>
+<!-- structured-process-demo:structured-step-description-demo-result:json:end -->
+
+</div></div><div><div>
+
+<!-- structured-process-demo:structured-step-description-demo:mermaid:start -->
+```mermaid
+flowchart TD
+  start([Start])
+  step_0["VALIDATE: label=Validate amount, area=billing, severity=high
+[ok]"]
+  step_0 --> step_1
+  step_1["ROUTE: label=Route review, area=risk, severity=low
+branches: manual
+[ok]"]
+  branch_1_end["ROUTE:
+end"]
+  branch_1_end --> done
+  class branch_1_end join
+  branch_1_0_start["Branch: manual"]
+  step_1 --> branch_1_0_start
+  branch_1_0_step_0["MANUAL-1: label=Manual review, area=risk, severity=high
+[ok]"]
+  branch_1_0_start --> branch_1_0_step_0
+  branch_1_0_step_0 --> branch_1_end
+  class branch_1_0_step_0 success
+  class branch_1_0_start executed
+  branch_1_1_start["Branch: auto
+[skip]"]
+  step_1 --> branch_1_1_start
+  branch_1_1_step_0["AUTO-1: label=Auto approve, area=risk, severity=low
+[skip]"]
+  branch_1_1_start --> branch_1_1_step_0
+  branch_1_1_step_0 --> branch_1_end
+  class branch_1_1_step_0 neutral
+  class branch_1_1_start neutral
+  done([Done])
+  start --> step_0
+  classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
+  classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px
+  classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
+  classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
+  classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
+  class step_0 success
+  class step_1 success
+  class start executed
+  class done success
+```
+<!-- structured-process-demo:structured-step-description-demo:mermaid:end -->
+
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span><br><strong>Failed steps:</strong> none</p>
+<!-- structured-process-demo:structured-step-description-demo:html-table:start -->
+<table style="width:100%;border-collapse:collapse;font-size:14px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<tbody><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">VALIDATE</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;label&quot;:&quot;Validate amount&quot;,&quot;area&quot;:&quot;billing&quot;,&quot;severity&quot;:&quot;high&quot;}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;normalizedAmount&quot;:1400}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+</tr><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">ROUTE</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;label&quot;:&quot;Route review&quot;,&quot;area&quot;:&quot;risk&quot;,&quot;severity&quot;:&quot;low&quot;}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>manual</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;amount&quot;:-1400,&quot;normalizedAmount&quot;:1400,&quot;queuedForReview&quot;:true}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>MANUAL-1: {&quot;label&quot;:&quot;Manual review&quot;,&quot;area&quot;:&quot;risk&quot;,&quot;severity&quot;:&quot;high&quot;} <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+
+<div style="margin-top:2px;color:#475569;">Add to ctx: {&quot;queuedForReview&quot;:true}</div>
+
+</div>
+</div><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>auto</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;amount&quot;:-1400,&quot;normalizedAmount&quot;:1400}</div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>AUTO-1: {&quot;label&quot;:&quot;Auto approve&quot;,&quot;area&quot;:&quot;risk&quot;,&quot;severity&quot;:&quot;low&quot;} <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+
+
+</div>
+</div></td>
+</tr></tbody>
+</table>
+<!-- structured-process-demo:structured-step-description-demo:html-table:end --></div></div>
+
+## Step results and execution visualized
+
+### Flow
 
 ```ts
 type SubmittedForm = { id: string }
@@ -111,14 +382,14 @@ async function crossCheckFormAndOccupancies({ form }: { form: SubmittedForm; occ
   })
 }
 
-const sequence = createAsync<{ form: SubmittedForm }, string>()
+const sequence = createAsyncFlow<{ form: SubmittedForm }, string>()
   .step('IC10', 'Get linked occupancy records', getOccupancies)
   .step('IC25', 'Count the recovered occupancy trail and insist on exactly two records', verifyOccupancyCount)
   .step('IC30', 'Cross-check the submitted form against the recovered occupancy trail', crossCheckFormAndOccupancies)
   .build()
 ```
 
-## Static Graph
+### Static Graph
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>Static sequence view does not have a run result yet.</p></div><div><div>
 
@@ -147,11 +418,11 @@ flowchart TD
 <table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th></tr></thead><tbody><tr><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC10</td><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Get linked occupancy records</td></tr><tr><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC25</td><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Count the recovered occupancy trail and insist on exactly two records</td></tr><tr><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC30</td><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Cross-check the submitted form against the recovered occupancy trail</td></tr></tbody></table>
 <!-- structured-process-demo:static-graph:html-table:end --></div></div>
 
-## Passing Demo
+### Passing Demo
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
-<p><strong>Init JSON</strong></p>
+<p><strong>Initial JSON parameter</strong></p>
 <!-- structured-process-demo:passing-demo-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -162,7 +433,7 @@ flowchart TD
 </pre>
 <!-- structured-process-demo:passing-demo-init:json:end -->
 
-<p><strong>Result JSON</strong></p>
+<p><strong>Resulting JSON</strong></p>
 <!-- structured-process-demo:passing-demo-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -171,7 +442,17 @@ flowchart TD
   &quot;stepResults&quot;: [
     {
       &quot;id&quot;: &quot;IC10&quot;,
-      &quot;result&quot;: &quot;ok&quot;
+      &quot;result&quot;: &quot;ok&quot;,
+      &quot;addToCtx&quot;: {
+        &quot;occupancies&quot;: [
+          {
+            &quot;id&quot;: &quot;a200&quot;
+          },
+          {
+            &quot;id&quot;: &quot;b200&quot;
+          }
+        ]
+      }
     },
     {
       &quot;id&quot;: &quot;IC25&quot;,
@@ -184,7 +465,7 @@ flowchart TD
       &quot;info&quot;: &quot;The submitted form and occupancy trail tell a consistent story.&quot;
     }
   ],
-  &quot;ctx&quot;: {
+  &quot;finalCtx&quot;: {
     &quot;form&quot;: {
       &quot;id&quot;: &quot;200&quot;
     },
@@ -237,12 +518,13 @@ The submitted form and occupancy trail tell a consistent story."]
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span><br><strong>Failed steps:</strong> none</p>
 <!-- structured-process-demo:passing-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
-<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC10</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Get linked occupancy records</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;occupancies&quot;:[{&quot;id&quot;:&quot;a200&quot;},{&quot;id&quot;:&quot;b200&quot;}]}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC25</td>
@@ -250,21 +532,23 @@ The submitted form and occupancy trail tell a consistent story."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Recovered the full two-record occupancy trail.</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC30</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Cross-check the submitted form against the recovered occupancy trail</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">The submitted form and occupancy trail tell a consistent story.</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
 <!-- structured-process-demo:passing-demo:html-table:end --></div></div>
 
-## Failing Demo
+### Failing Demo
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
-<p><strong>Init JSON</strong></p>
+<p><strong>Initial JSON parameter</strong></p>
 <!-- structured-process-demo:failing-demo-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -275,7 +559,7 @@ The submitted form and occupancy trail tell a consistent story."]
 </pre>
 <!-- structured-process-demo:failing-demo-init:json:end -->
 
-<p><strong>Result JSON</strong></p>
+<p><strong>Resulting JSON</strong></p>
 <!-- structured-process-demo:failing-demo-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -286,7 +570,14 @@ The submitted form and occupancy trail tell a consistent story."]
   &quot;stepResults&quot;: [
     {
       &quot;id&quot;: &quot;IC10&quot;,
-      &quot;result&quot;: &quot;ok&quot;
+      &quot;result&quot;: &quot;ok&quot;,
+      &quot;addToCtx&quot;: {
+        &quot;occupancies&quot;: [
+          {
+            &quot;id&quot;: &quot;a123&quot;
+          }
+        ]
+      }
     },
     {
       &quot;id&quot;: &quot;IC25&quot;,
@@ -299,7 +590,7 @@ The submitted form and occupancy trail tell a consistent story."]
       &quot;info&quot;: &quot;The submitted form is acceptable, but the occupancy trail is still incomplete.&quot;
     }
   ],
-  &quot;ctx&quot;: {
+  &quot;finalCtx&quot;: {
     &quot;form&quot;: {
       &quot;id&quot;: &quot;123&quot;
     },
@@ -349,12 +640,13 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> IC25</p>
 <!-- structured-process-demo:failing-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
-<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC10</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Get linked occupancy records</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;occupancies&quot;:[{&quot;id&quot;:&quot;a123&quot;}]}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC25</td>
@@ -362,21 +654,23 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Expected two occupancy records but found an incomplete trail.</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC30</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Cross-check the submitted form against the recovered occupancy trail</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">The submitted form is acceptable, but the occupancy trail is still incomplete.</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
 <!-- structured-process-demo:failing-demo:html-table:end --></div></div>
 
-## Stop Demo
+### Stop Demo
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
-<p><strong>Init JSON</strong></p>
+<p><strong>Initial JSON parameter</strong></p>
 <!-- structured-process-demo:stop-demo-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -387,7 +681,7 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
 </pre>
 <!-- structured-process-demo:stop-demo-init:json:end -->
 
-<p><strong>Result JSON</strong></p>
+<p><strong>Resulting JSON</strong></p>
 <!-- structured-process-demo:stop-demo-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -396,7 +690,17 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
   &quot;stepResults&quot;: [
     {
       &quot;id&quot;: &quot;IC10&quot;,
-      &quot;result&quot;: &quot;ok&quot;
+      &quot;result&quot;: &quot;ok&quot;,
+      &quot;addToCtx&quot;: {
+        &quot;occupancies&quot;: [
+          {
+            &quot;id&quot;: &quot;a300&quot;
+          },
+          {
+            &quot;id&quot;: &quot;b300&quot;
+          }
+        ]
+      }
     },
     {
       &quot;id&quot;: &quot;IC25&quot;,
@@ -408,7 +712,7 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
       &quot;result&quot;: &quot;skip&quot;
     }
   ],
-  &quot;ctx&quot;: {
+  &quot;finalCtx&quot;: {
     &quot;form&quot;: {
       &quot;id&quot;: &quot;300&quot;
     },
@@ -460,12 +764,13 @@ The first two records are enough here, so the sequence can finish early."]
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f0fdf4;color:#166534;border:1px solid #86efac;">completed early</span><br><strong>Failed steps:</strong> none</p>
 <!-- structured-process-demo:stop-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
-<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC10</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Get linked occupancy records</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;occupancies&quot;:[{&quot;id&quot;:&quot;a300&quot;},{&quot;id&quot;:&quot;b300&quot;}]}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC25</td>
@@ -473,21 +778,23 @@ The first two records are enough here, so the sequence can finish early."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f0fdf4;color:#166534;border:1px solid #86efac;">stop</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">The first two records are enough here, so the sequence can finish early.</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC30</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Cross-check the submitted form against the recovered occupancy trail</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
 <!-- structured-process-demo:stop-demo:html-table:end --></div></div>
 
-## Exception Demo
+### Exception Demo
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
-<p><strong>Init JSON</strong></p>
+<p><strong>Initial JSON parameter</strong></p>
 <!-- structured-process-demo:exception-demo-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -498,7 +805,7 @@ The first two records are enough here, so the sequence can finish early."]
 </pre>
 <!-- structured-process-demo:exception-demo-init:json:end -->
 
-<p><strong>Result JSON</strong></p>
+<p><strong>Resulting JSON</strong></p>
 <!-- structured-process-demo:exception-demo-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -509,7 +816,17 @@ The first two records are enough here, so the sequence can finish early."]
   &quot;stepResults&quot;: [
     {
       &quot;id&quot;: &quot;IC10&quot;,
-      &quot;result&quot;: &quot;ok&quot;
+      &quot;result&quot;: &quot;ok&quot;,
+      &quot;addToCtx&quot;: {
+        &quot;occupancies&quot;: [
+          {
+            &quot;id&quot;: &quot;a400&quot;
+          },
+          {
+            &quot;id&quot;: &quot;b400&quot;
+          }
+        ]
+      }
     },
     {
       &quot;id&quot;: &quot;IC25&quot;,
@@ -521,7 +838,7 @@ The first two records are enough here, so the sequence can finish early."]
       &quot;result&quot;: &quot;skip&quot;
     }
   ],
-  &quot;ctx&quot;: {
+  &quot;finalCtx&quot;: {
     &quot;form&quot;: {
       &quot;id&quot;: &quot;400&quot;
     },
@@ -573,12 +890,13 @@ A contradictory record was discovered, so the sequence stops immediately."]
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">stopped by exception</span><br><strong>Failed steps:</strong> IC25</p>
 <!-- structured-process-demo:exception-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
-<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC10</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Get linked occupancy records</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;occupancies&quot;:[{&quot;id&quot;:&quot;a400&quot;},{&quot;id&quot;:&quot;b400&quot;}]}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC25</td>
@@ -586,45 +904,49 @@ A contradictory record was discovered, so the sequence stops immediately."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">exception</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">A contradictory record was discovered, so the sequence stops immediately.</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC30</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Cross-check the submitted form against the recovered occupancy trail</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
 <!-- structured-process-demo:exception-demo:html-table:end --></div></div>
 
-# branch() examples
+## branch() examples
 
-## One Of Three Branches
+### One Of Three Branches
 
-This run selects exactly one branch from three branches.
+Select one branch from three.
 
 ```ts
 type PostingKind = 'income' | 'expense' | 'transfer'
 
-const incomeFlow = createSync<{ amount: number; kind: PostingKind }>()
-  .step('IN-1', 'Handle income', ({ amount }) => ({
+const incomeFlow = createSyncFlow<{ amount: number; kind: PostingKind }>().step(
+  'IN-1',
+  'Handle income',
+  ({ amount }) => ({
     normalizedAmount: amount,
-  }))
-  .build()
+  })
+)
 
-const expenseFlow = createSync<{ amount: number; kind: PostingKind }>()
-  .step('EX-1', 'Handle expense', ({ amount }) => ({
+const expenseFlow = createSyncFlow<{ amount: number; kind: PostingKind }>().step(
+  'EX-1',
+  'Handle expense',
+  ({ amount }) => ({
     normalizedAmount: -amount,
-  }))
-  .build()
+  })
+)
 
-const transferFlow = createSync<{ amount: number; kind: PostingKind }>()
-  .step('TR-1', 'Handle transfer', () => ({
-    transferSeen: true,
-  }))
-  .build()
+const transferFlow = createSyncFlow<{ amount: number; kind: PostingKind }>().step('TR-1', 'Handle transfer', () => ({
+  transferSeen: true,
+}))
 
-const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
-  .branch('ROUTE', ({ kind }) => kind, {
+const oneOfThreeBranchFlow = createSyncFlow<{ amount: number; kind: PostingKind }>()
+  .branch('ROUTE', 'Route posting kind', ({ kind }) => kind, {
     income: incomeFlow,
     expense: expenseFlow,
     transfer: transferFlow,
@@ -634,7 +956,7 @@ const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
-<p><strong>Init JSON</strong></p>
+<p><strong>Initial JSON parameter</strong></p>
 <!-- structured-process-demo:branch-one-of-three-demo-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -644,7 +966,7 @@ const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
 </pre>
 <!-- structured-process-demo:branch-one-of-three-demo-init:json:end -->
 
-<p><strong>Result JSON</strong></p>
+<p><strong>Resulting JSON</strong></p>
 <!-- structured-process-demo:branch-one-of-three-demo-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -658,7 +980,7 @@ const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
         {
           &quot;key&quot;: &quot;expense&quot;,
           &quot;result&quot;: &quot;ok&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;amount&quot;: 24,
             &quot;kind&quot;: &quot;expense&quot;,
             &quot;normalizedAmount&quot;: -24
@@ -672,14 +994,17 @@ const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
           &quot;stepResults&quot;: [
             {
               &quot;id&quot;: &quot;EX-1&quot;,
-              &quot;result&quot;: &quot;ok&quot;
+              &quot;result&quot;: &quot;ok&quot;,
+              &quot;addToCtx&quot;: {
+                &quot;normalizedAmount&quot;: -24
+              }
             }
           ]
         },
         {
           &quot;key&quot;: &quot;income&quot;,
           &quot;result&quot;: &quot;skip&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;amount&quot;: 24,
             &quot;kind&quot;: &quot;expense&quot;
           },
@@ -699,7 +1024,7 @@ const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
         {
           &quot;key&quot;: &quot;transfer&quot;,
           &quot;result&quot;: &quot;skip&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;amount&quot;: 24,
             &quot;kind&quot;: &quot;expense&quot;
           },
@@ -719,7 +1044,7 @@ const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
       ]
     }
   ],
-  &quot;ctx&quot;: {
+  &quot;finalCtx&quot;: {
     &quot;amount&quot;: 24,
     &quot;kind&quot;: &quot;expense&quot;
   }
@@ -733,7 +1058,7 @@ const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
 ```mermaid
 flowchart TD
   start([Start])
-  step_0["ROUTE:
+  step_0["ROUTE: Route posting kind
 branches: expense
 [ok]"]
   branch_0_end["ROUTE:
@@ -783,33 +1108,37 @@ end"]
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span><br><strong>Failed steps:</strong> none</p>
 <!-- structured-process-demo:branch-one-of-three-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
-<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">ROUTE</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Branch</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Route posting kind</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>expense</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;,&quot;normalizedAmount&quot;:-24}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;,&quot;normalizedAmount&quot;:-24}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>EX-1: Handle expense <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
 
+<div style="margin-top:2px;color:#475569;">Add to ctx: {&quot;normalizedAmount&quot;:-24}</div>
 
 </div>
 </div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>income</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>IN-1: Handle income <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 
 </div>
 </div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>transfer</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;amount&quot;:24,&quot;kind&quot;:&quot;expense&quot;}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>TR-1: Handle transfer <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 
 </div>
@@ -818,36 +1147,37 @@ end"]
 </table>
 <!-- structured-process-demo:branch-one-of-three-demo:html-table:end --></div></div>
 
-## Two Of Three Branches
+### Two Of Three Branches
 
-This run selects two branches from three branches and records each branch result separately.
+Select two branches and record each result.
 
 ```ts
 type CheckName = 'tax' | 'fraud' | 'policy'
 
-const taxFlow = createAsync<{ amount: number; checks: CheckName[] }>()
-  .step('TAX-1', 'Check taxes', async () => ({
-    taxChecked: true,
-  }))
-  .build()
+const taxFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }>().step('TAX-1', 'Check taxes', async () => ({
+  taxChecked: true,
+}))
 
-const fraudFlow = createAsync<{ amount: number; checks: CheckName[] }, string>()
-  .step('FRAUD-1', 'Check fraud', async () =>
+const fraudFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }, string>().step(
+  'FRAUD-1',
+  'Check fraud',
+  async () =>
     stepResult({
       result: 'error',
       info: 'Fraud review failed.',
     })
-  )
-  .build()
+)
 
-const policyFlow = createAsync<{ amount: number; checks: CheckName[] }>()
-  .step('POLICY-1', 'Check policy', async () => ({
+const policyFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }>().step(
+  'POLICY-1',
+  'Check policy',
+  async () => ({
     policyChecked: true,
-  }))
-  .build()
+  })
+)
 
-const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }>()
-  .branch('CHECKS', ({ checks }) => checks, {
+const twoOfThreeBranchFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }>()
+  .branch('CHECKS', 'Run selected checks', ({ checks }) => checks, {
     tax: taxFlow,
     fraud: fraudFlow,
     policy: policyFlow,
@@ -857,7 +1187,7 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
-<p><strong>Init JSON</strong></p>
+<p><strong>Initial JSON parameter</strong></p>
 <!-- structured-process-demo:branch-two-of-three-demo-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -870,7 +1200,7 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
 </pre>
 <!-- structured-process-demo:branch-two-of-three-demo-init:json:end -->
 
-<p><strong>Result JSON</strong></p>
+<p><strong>Resulting JSON</strong></p>
 <!-- structured-process-demo:branch-two-of-three-demo-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -886,7 +1216,7 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
         {
           &quot;key&quot;: &quot;tax&quot;,
           &quot;result&quot;: &quot;ok&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;amount&quot;: 8,
             &quot;checks&quot;: [
               &quot;tax&quot;,
@@ -903,14 +1233,17 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
           &quot;stepResults&quot;: [
             {
               &quot;id&quot;: &quot;TAX-1&quot;,
-              &quot;result&quot;: &quot;ok&quot;
+              &quot;result&quot;: &quot;ok&quot;,
+              &quot;addToCtx&quot;: {
+                &quot;taxChecked&quot;: true
+              }
             }
           ]
         },
         {
           &quot;key&quot;: &quot;fraud&quot;,
           &quot;result&quot;: &quot;error&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;amount&quot;: 8,
             &quot;checks&quot;: [
               &quot;tax&quot;,
@@ -934,7 +1267,7 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
         {
           &quot;key&quot;: &quot;policy&quot;,
           &quot;result&quot;: &quot;skip&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;amount&quot;: 8,
             &quot;checks&quot;: [
               &quot;tax&quot;,
@@ -957,7 +1290,7 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
       ]
     }
   ],
-  &quot;ctx&quot;: {
+  &quot;finalCtx&quot;: {
     &quot;amount&quot;: 8,
     &quot;checks&quot;: [
       &quot;tax&quot;,
@@ -974,7 +1307,7 @@ const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }
 ```mermaid
 flowchart TD
   start([Start])
-  step_0["CHECKS:
+  step_0["CHECKS: Run selected checks
 branches: tax, fraud
 [error]"]
   branch_0_end["CHECKS:
@@ -1024,33 +1357,37 @@ Fraud review failed."]
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> CHECKS</p>
 <!-- structured-process-demo:branch-two-of-three-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
-<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">CHECKS</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Branch</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Run selected checks</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>tax</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;],&quot;taxChecked&quot;:true}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;],&quot;taxChecked&quot;:true}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>TAX-1: Check taxes <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
 
+<div style="margin-top:2px;color:#475569;">Add to ctx: {&quot;taxChecked&quot;:true}</div>
 
 </div>
 </div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>fraud</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;]}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;]}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>FRAUD-1: Check fraud <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
 <div style="margin-top:2px;color:#475569;">Fraud review failed.</div>
 
+
 </div>
 </div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>policy</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;]}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;amount&quot;:8,&quot;checks&quot;:[&quot;tax&quot;,&quot;fraud&quot;]}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>POLICY-1: Check policy <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 
 </div>
@@ -1059,41 +1396,50 @@ Fraud review failed."]
 </table>
 <!-- structured-process-demo:branch-two-of-three-demo:html-table:end --></div></div>
 
-## Nested Branch
+### Nested Branch
 
-This run selects `B` from the first branch step, then selects `D` from the nested branch inside `B`.
+Select `B`, then `D` inside `B`.
 
 ```ts
 type FirstBranch = 'A' | 'B'
 type SecondBranch = 'C' | 'D'
 
-const branchAFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .step('A-1', 'Handle A', () => ({
+const branchAFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().step(
+  'A-1',
+  'Handle A',
+  () => ({
     visitedA: true,
-  }))
-  .build()
+  })
+)
 
-const branchCFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .step('C-1', 'Handle C', () => ({
+const branchCFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().step(
+  'C-1',
+  'Handle C',
+  () => ({
     visitedC: true,
-  }))
-  .build()
+  })
+)
 
-const branchDFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .step('D-1', 'Handle D', () => ({
+const branchDFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().step(
+  'D-1',
+  'Handle D',
+  () => ({
     visitedD: true,
-  }))
-  .build()
+  })
+)
 
-const branchBFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .branch('B-ROUTE', ({ secondBranch }) => secondBranch, {
+const branchBFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().branch(
+  'B-ROUTE',
+  'Route second branch',
+  ({ secondBranch }) => secondBranch,
+  {
     C: branchCFlow,
     D: branchDFlow,
-  })
-  .build()
+  }
+)
 
-const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .branch('ROOT-ROUTE', ({ firstBranch }) => firstBranch, {
+const nestedBranchFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
+  .branch('ROOT-ROUTE', 'Route first branch', ({ firstBranch }) => firstBranch, {
     A: branchAFlow,
     B: branchBFlow,
   })
@@ -1102,7 +1448,7 @@ const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: Se
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
-<p><strong>Init JSON</strong></p>
+<p><strong>Initial JSON parameter</strong></p>
 <!-- structured-process-demo:nested-branch-demo-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -1112,7 +1458,7 @@ const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: Se
 </pre>
 <!-- structured-process-demo:nested-branch-demo-init:json:end -->
 
-<p><strong>Result JSON</strong></p>
+<p><strong>Resulting JSON</strong></p>
 <!-- structured-process-demo:nested-branch-demo-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -1126,14 +1472,14 @@ const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: Se
         {
           &quot;key&quot;: &quot;B&quot;,
           &quot;result&quot;: &quot;ok&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;firstBranch&quot;: &quot;B&quot;,
             &quot;secondBranch&quot;: &quot;D&quot;
           },
           &quot;steps&quot;: [
             {
               &quot;id&quot;: &quot;B-ROUTE&quot;,
-              &quot;description&quot;: &quot;Branch&quot;
+              &quot;description&quot;: &quot;Route second branch&quot;
             }
           ],
           &quot;stepResults&quot;: [
@@ -1144,7 +1490,7 @@ const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: Se
                 {
                   &quot;key&quot;: &quot;D&quot;,
                   &quot;result&quot;: &quot;ok&quot;,
-                  &quot;ctx&quot;: {
+                  &quot;finalCtx&quot;: {
                     &quot;firstBranch&quot;: &quot;B&quot;,
                     &quot;secondBranch&quot;: &quot;D&quot;,
                     &quot;visitedD&quot;: true
@@ -1158,14 +1504,17 @@ const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: Se
                   &quot;stepResults&quot;: [
                     {
                       &quot;id&quot;: &quot;D-1&quot;,
-                      &quot;result&quot;: &quot;ok&quot;
+                      &quot;result&quot;: &quot;ok&quot;,
+                      &quot;addToCtx&quot;: {
+                        &quot;visitedD&quot;: true
+                      }
                     }
                   ]
                 },
                 {
                   &quot;key&quot;: &quot;C&quot;,
                   &quot;result&quot;: &quot;skip&quot;,
-                  &quot;ctx&quot;: {
+                  &quot;finalCtx&quot;: {
                     &quot;firstBranch&quot;: &quot;B&quot;,
                     &quot;secondBranch&quot;: &quot;D&quot;
                   },
@@ -1189,7 +1538,7 @@ const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: Se
         {
           &quot;key&quot;: &quot;A&quot;,
           &quot;result&quot;: &quot;skip&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;firstBranch&quot;: &quot;B&quot;,
             &quot;secondBranch&quot;: &quot;D&quot;
           },
@@ -1209,7 +1558,7 @@ const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: Se
       ]
     }
   ],
-  &quot;ctx&quot;: {
+  &quot;finalCtx&quot;: {
     &quot;firstBranch&quot;: &quot;B&quot;,
     &quot;secondBranch&quot;: &quot;D&quot;
   }
@@ -1223,7 +1572,7 @@ const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: Se
 ```mermaid
 flowchart TD
   start([Start])
-  step_0["ROOT-ROUTE:
+  step_0["ROOT-ROUTE: Route first branch
 branches: B
 [ok]"]
   branch_0_end["ROOT-ROUTE:
@@ -1232,7 +1581,7 @@ end"]
   class branch_0_end join
   branch_0_0_start["Branch: B"]
   step_0 --> branch_0_0_start
-  branch_0_0_step_0["B-ROUTE:
+  branch_0_0_step_0["B-ROUTE: Route second branch
 branches: D
 [ok]"]
   branch_0_0_start --> branch_0_0_step_0
@@ -1285,31 +1634,35 @@ end"]
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span><br><strong>Failed steps:</strong> none</p>
 <!-- structured-process-demo:nested-branch-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
-<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">ROOT-ROUTE</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Branch</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Route first branch</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>B</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;}</div>
 <div style="margin-top:4px;padding-left:12px;">
-<div>B-ROUTE: Branch <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div>B-ROUTE: Route second branch <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+
 
 <div style="margin-bottom:10px;padding-left:24px;">
 <div><strong>D</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;,&quot;visitedD&quot;:true}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;,&quot;visitedD&quot;:true}</div>
 <div style="margin-top:4px;padding-left:36px;">
 <div>D-1: Handle D <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
 
+<div style="margin-top:2px;color:#475569;">Add to ctx: {&quot;visitedD&quot;:true}</div>
 
 </div>
 </div><div style="margin-bottom:10px;padding-left:24px;">
 <div><strong>C</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;}</div>
 <div style="margin-top:4px;padding-left:36px;">
 <div>C-1: Handle C <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 
 </div>
@@ -1317,9 +1670,10 @@ end"]
 </div>
 </div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>A</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;firstBranch&quot;:&quot;B&quot;,&quot;secondBranch&quot;:&quot;D&quot;}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>A-1: Handle A <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 
 </div>
@@ -1328,31 +1682,25 @@ end"]
 </table>
 <!-- structured-process-demo:nested-branch-demo:html-table:end --></div></div>
 
-## Skipped Branch
+### Skipped Branch
 
-This run returns `skip` directly from the selector, so no child branch flow is executed.
+Return `skip` directly from the selector.
 
 ```ts
-const approveFlow = createSync<{ shouldRunChecks: boolean }>()
-  .step('APP-1', 'Approve', () => ({
-    approved: true,
-  }))
-  .build()
+const approveFlow = createSyncFlow<{ shouldRunChecks: boolean }>().step('APP-1', 'Approve', () => ({
+  approved: true,
+}))
 
-const rejectFlow = createSync<{ shouldRunChecks: boolean }>()
-  .step('REJ-1', 'Reject', () => ({
-    rejected: true,
-  }))
-  .build()
+const rejectFlow = createSyncFlow<{ shouldRunChecks: boolean }>().step('REJ-1', 'Reject', () => ({
+  rejected: true,
+}))
 
-const reviewFlow = createSync<{ shouldRunChecks: boolean }>()
-  .step('REV-1', 'Review', () => ({
-    reviewed: true,
-  }))
-  .build()
+const reviewFlow = createSyncFlow<{ shouldRunChecks: boolean }>().step('REV-1', 'Review', () => ({
+  reviewed: true,
+}))
 
-const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
-  .branch('OPTIONAL-CHECKS', ({ shouldRunChecks }) => (shouldRunChecks ? 'review' : 'skip'), {
+const skippedBranchFlow = createSyncFlow<{ shouldRunChecks: boolean }>()
+  .branch('OPTIONAL-CHECKS', 'Optionally run checks', ({ shouldRunChecks }) => (shouldRunChecks ? 'review' : 'skip'), {
     approve: approveFlow,
     reject: rejectFlow,
     review: reviewFlow,
@@ -1362,7 +1710,7 @@ const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
-<p><strong>Init JSON</strong></p>
+<p><strong>Initial JSON parameter</strong></p>
 <!-- structured-process-demo:branch-skip-demo-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -1371,7 +1719,7 @@ const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
 </pre>
 <!-- structured-process-demo:branch-skip-demo-init:json:end -->
 
-<p><strong>Result JSON</strong></p>
+<p><strong>Resulting JSON</strong></p>
 <!-- structured-process-demo:branch-skip-demo-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -1385,7 +1733,7 @@ const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
         {
           &quot;key&quot;: &quot;approve&quot;,
           &quot;result&quot;: &quot;skip&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;shouldRunChecks&quot;: false
           },
           &quot;steps&quot;: [
@@ -1404,7 +1752,7 @@ const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
         {
           &quot;key&quot;: &quot;reject&quot;,
           &quot;result&quot;: &quot;skip&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;shouldRunChecks&quot;: false
           },
           &quot;steps&quot;: [
@@ -1423,7 +1771,7 @@ const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
         {
           &quot;key&quot;: &quot;review&quot;,
           &quot;result&quot;: &quot;skip&quot;,
-          &quot;ctx&quot;: {
+          &quot;finalCtx&quot;: {
             &quot;shouldRunChecks&quot;: false
           },
           &quot;steps&quot;: [
@@ -1442,7 +1790,7 @@ const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
       ]
     }
   ],
-  &quot;ctx&quot;: {
+  &quot;finalCtx&quot;: {
     &quot;shouldRunChecks&quot;: false
   }
 }</code>
@@ -1455,7 +1803,7 @@ const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
 ```mermaid
 flowchart TD
   start([Start])
-  step_0["OPTIONAL-CHECKS: branch()
+  step_0["OPTIONAL-CHECKS: Optionally run checks
 [skip]"]
   branch_0_end["OPTIONAL-CHECKS:
 end"]
@@ -1505,33 +1853,37 @@ end"]
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">done</span><br><strong>Failed steps:</strong> none</p>
 <!-- structured-process-demo:branch-skip-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
-<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">OPTIONAL-CHECKS</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Branch</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Optionally run checks</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>approve</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;shouldRunChecks&quot;:false}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;shouldRunChecks&quot;:false}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>APP-1: Approve <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 
 </div>
 </div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>reject</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;shouldRunChecks&quot;:false}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;shouldRunChecks&quot;:false}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>REJ-1: Reject <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 
 </div>
 </div><div style="margin-bottom:10px;padding-left:0px;">
 <div><strong>review</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
-<div style="margin-top:2px;color:#475569;">Ctx: {&quot;shouldRunChecks&quot;:false}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: {&quot;shouldRunChecks&quot;:false}</div>
 <div style="margin-top:4px;padding-left:12px;">
 <div>REV-1: Review <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
 
 
 </div>
