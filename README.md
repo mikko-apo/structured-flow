@@ -95,7 +95,8 @@ The table below shows how each recorded `result` affects execution and ctx updat
 
 - `FlowResult` exposes `ok`, `finalCtx`, `stepResults`, and `failedStepIds()`.
 - Use `result.ok` for the top-level pass/fail check.
-- Use `result.failedStepIds()` to list the failed step ids.
+- `result.failedStepIds()` returns failed ids from the main flow and nested branch flows.
+- `result.failedStepIds({ branchPrefix: true })` prefixes nested branch failures with their parent branch step ids.
 - Each `stepResult` records `id`, `result`, optional `info`, optional `addToCtx`, and optional nested `branches`.
 - `result.enrichResult()` returns an enriched results object which contains the step's `description` to each recorded step result, including nested branch results.
 
@@ -1258,7 +1259,8 @@ const twoOfThreeBranchFlow = createAsyncFlow(
 <code>{
   &quot;ok&quot;: false,
   &quot;failedStepIds&quot;: [
-    &quot;CHECKS&quot;
+    &quot;CHECKS&quot;,
+    &quot;FRAUD-1&quot;
   ],
   &quot;stepResults&quot;: [
     {
@@ -1406,7 +1408,7 @@ Fraud review failed."]
 ```
 <!-- structured-process-demo:branch-two-of-three-demo:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> CHECKS</p>
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> CHECKS, FRAUD-1</p>
 <!-- structured-process-demo:branch-two-of-three-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>

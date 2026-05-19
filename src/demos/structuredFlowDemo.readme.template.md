@@ -95,7 +95,8 @@ The table below shows how each recorded `result` affects execution and ctx updat
 
 - `FlowResult` exposes `ok`, `finalCtx`, `stepResults`, and `failedStepIds()`.
 - Use `result.ok` for the top-level pass/fail check.
-- Use `result.failedStepIds()` to list the failed step ids.
+- `result.failedStepIds()` returns failed ids from the main flow and nested branch flows.
+- `result.failedStepIds({ branchPrefix: true })` prefixes nested branch failures with their parent branch step ids.
 - Each `stepResult` records `id`, `result`, optional `info`, optional `addToCtx`, and optional nested `branches`.
 - `result.enrichResult()` returns an enriched results object which contains the step's `description` to each recorded step result, including nested branch results.
 

@@ -416,6 +416,25 @@ describe('structuredFlow core execution', () => {
     expect(enrichedResult.failedStepIds()).toEqual([])
   })
 
+  it('collects nested failed ids from enriched results and can prefix branch ids', () => {
+    const flow = createSyncFlow('BR-1', 'Route request', ({ route }: { route: 'approved' | 'rejected' }) => route, {
+      approved: createSyncFlow('APP-1', 'Approve request', () => ({
+        approved: true,
+      })),
+      rejected: createSyncFlow<string, string>('REJ-1', 'Reject request', () =>
+        stepResult({
+          result: 'error',
+          info: 'Rejected in child flow.',
+        })
+      ),
+    }).build()
+
+    const enrichedResult = flow.run({ route: 'rejected' }).enrichResult()
+
+    expect(enrichedResult.failedStepIds()).toEqual(['BR-1', 'REJ-1'])
+    expect(enrichedResult.failedStepIds({ branchPrefix: true })).toEqual(['BR-1', 'BR-1/REJ-1'])
+  })
+
   it('supports empty flows and empty enriched results', () => {
     const flow = createSyncFlow<{ amount: number }>().build()
 
