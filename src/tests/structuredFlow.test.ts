@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
 
 describe('structuredFlow core execution', () => {
   it('accumulates ctx from successful sync steps', () => {
-    const flow = createSyncFlow<{ amount: number }, string>()
-      .step('S1', 'Add tax', ({ amount }) => ({
-        taxedAmount: amount * 1.24,
-      }))
+    const flow = createSyncFlow<string, string>('S1', 'Add tax', ({ amount }: { amount: number }) => ({
+      taxedAmount: amount * 1.24,
+    }))
       .step('S2', 'Finalize total', ({ taxedAmount }) =>
         stepResult({
           info: 'Total finalized.',
@@ -31,13 +30,12 @@ describe('structuredFlow core execution', () => {
   })
 
   it('continues after error and marks the flow as failed', () => {
-    const flow = createSyncFlow<{ amount: number }, string>()
-      .step('S1', 'Validate amount', () =>
-        stepResult({
-          result: 'error',
-          info: 'Amount failed validation.',
-        })
-      )
+    const flow = createSyncFlow<string, string>('S1', 'Validate amount', ({ amount }: { amount: number }) =>
+      stepResult({
+        result: 'error',
+        info: `Amount ${amount} failed validation.`,
+      })
+    )
       .step('S2', 'Still runs', () => ({
         afterError: true,
       }))
@@ -52,20 +50,44 @@ describe('structuredFlow core execution', () => {
       afterError: true,
     })
     expect(result.stepResults).toEqual([
-      { id: 'S1', result: 'error', info: 'Amount failed validation.' },
+      { id: 'S1', result: 'error', info: 'Amount 10 failed validation.' },
       { id: 'S2', result: 'ok', addToCtx: { afterError: true } },
     ])
   })
 
+  it('continues after explicit skip without merging returned fields into ctx', () => {
+    const flow = createSyncFlow('S1', 'Optionally skip', ({ amount }: { amount: number }) =>
+      stepResult({
+        result: 'skip',
+        info: `Skipped amount ${amount}.`,
+      })
+    )
+      .step('S2', 'Still runs after skip', ({ amount }) => ({
+        continued: amount > 0,
+      }))
+      .build()
+
+    const result = flow.run({ amount: 10 })
+
+    expect(result.ok).toBe(true)
+    expect(result.finalCtx).toEqual({
+      amount: 10,
+      continued: true,
+    })
+    expect(result.stepResults).toEqual([
+      { id: 'S1', result: 'skip', info: 'Skipped amount 10.' },
+      { id: 'S2', result: 'ok', addToCtx: { continued: true } },
+    ])
+  })
+
   it('stops early and records remaining steps as skip', () => {
-    const flow = createSyncFlow<{ amount: number }, string>()
-      .step('S1', 'Stop early', ({ amount }) =>
-        stepResult({
-          result: 'stop',
-          info: 'Enough information collected.',
-          stoppedAmount: amount,
-        })
-      )
+    const flow = createSyncFlow<string, string>('S1', 'Stop early', ({ amount }: { amount: number }) =>
+      stepResult({
+        result: 'stop',
+        info: 'Enough information collected.',
+        stoppedAmount: amount,
+      })
+    )
       .step('S2', 'Skipped', () => ({
         unreachable: true,
       }))
@@ -85,10 +107,13 @@ describe('structuredFlow core execution', () => {
   })
 
   it('converts thrown exceptions into exception results and skips the rest', () => {
-    const flow = createSyncFlow<{ amount: number }>()
-      .step('S1', 'Throw', () => {
+    const flow = createSyncFlow('S1', 'Throw', ({ amount }: { amount: number }) => {
+      if (amount >= 0) {
         throw new Error('boom')
-      })
+      }
+
+      return { unreachable: true }
+    })
       .step('S2', 'Skipped after exception', () => ({
         unreachable: true,
       }))
@@ -106,10 +131,9 @@ describe('structuredFlow core execution', () => {
   })
 
   it('rejects ctx overwrites from later steps', () => {
-    const flow = createSyncFlow<{ amount: number }>()
-      .step('S1', 'Add total', () => ({
-        total: 10,
-      }))
+    const flow = createSyncFlow('S1', 'Add total', ({ amount }: { amount: number }) => ({
+      total: amount,
+    }))
       .step('S2', 'Try overwrite total', () => ({
         total: 20,
       }))
@@ -129,8 +153,8 @@ describe('structuredFlow core execution', () => {
   })
 
   it('rejects promises returned from sync flows', () => {
-    const flow = createSyncFlow<{ amount: number }>()
-      .step('S1', 'Invalid async in sync flow', (() => Promise.resolve({ later: true })) as never)
+    const flow = createSyncFlow('S1', 'Invalid async in sync flow', (({ amount }: { amount: number }) =>
+      Promise.resolve({ later: amount > 0 })) as never)
       .step('S2', 'Skipped', () => ({
         unreachable: true,
       }))
@@ -146,10 +170,9 @@ describe('structuredFlow core execution', () => {
   })
 
   it('awaits async steps and preserves async execution semantics', async () => {
-    const flow = createAsyncFlow<{ amount: number }, string>()
-      .step('A1', 'Load multiplier', async () => ({
-        multiplier: 3,
-      }))
+    const flow = createAsyncFlow<string, string>('A1', 'Load multiplier', async ({ amount }: { amount: number }) => ({
+      multiplier: amount > 5 ? 3 : 2,
+    }))
       .step('A2', 'Compute total', async ({ amount, multiplier }) =>
         stepResult({
           info: 'Computed asynchronously.',
@@ -198,35 +221,98 @@ describe('structuredFlow core execution', () => {
     })
   })
 
+  it('supports createSyncFlow<StepDescription, Info>(id, description, fn) as the first step', () => {
+    type StepMeta = { label: string }
+    type InfoMeta = { reason: string }
+
+    const flow = createSyncFlow<StepMeta, InfoMeta>('S1', { label: 'Add tax' }, ({ amount }: { amount: number }) =>
+      stepResult({
+        info: { reason: 'applied default rate' },
+        taxedAmount: amount * 1.24,
+      })
+    )
+      .step('S2', { label: 'Finalize total' }, ({ taxedAmount }) => ({
+        finalAmount: Math.round(taxedAmount * 100) / 100,
+      }))
+      .build()
+
+    const result = flow.run({ amount: 10 })
+
+    expect(flow.steps).toMatchObject([
+      { id: 'S1', description: { label: 'Add tax' } },
+      { id: 'S2', description: { label: 'Finalize total' } },
+    ])
+    expect(result.stepResults).toEqual([
+      { id: 'S1', result: 'ok', info: { reason: 'applied default rate' }, addToCtx: { taxedAmount: 12.4 } },
+      { id: 'S2', result: 'ok', addToCtx: { finalAmount: 12.4 } },
+    ])
+    expect(result.finalCtx).toEqual({ amount: 10, taxedAmount: 12.4, finalAmount: 12.4 })
+  })
+
+  it('supports createAsyncFlow<StepDescription, Info>(id, description, fn) as the first step', async () => {
+    type StepMeta = { label: string }
+    type InfoMeta = { source: string }
+
+    const flow = createAsyncFlow<StepMeta, InfoMeta>(
+      'A1',
+      { label: 'Load multiplier' },
+      async ({ amount }: { amount: number }) =>
+        stepResult({
+          info: { source: 'remote' },
+          multiplier: amount > 0 ? 3 : 0,
+        })
+    )
+      .step('A2', { label: 'Compute total' }, async ({ amount, multiplier }) => ({
+        total: amount * multiplier,
+      }))
+      .build()
+
+    const result = await flow.run({ amount: 7 })
+
+    expect(flow.steps).toMatchObject([
+      { id: 'A1', description: { label: 'Load multiplier' } },
+      { id: 'A2', description: { label: 'Compute total' } },
+    ])
+    expect(result.stepResults).toEqual([
+      { id: 'A1', result: 'ok', info: { source: 'remote' }, addToCtx: { multiplier: 3 } },
+      { id: 'A2', result: 'ok', addToCtx: { total: 21 } },
+    ])
+    expect(result.finalCtx).toEqual({ amount: 7, multiplier: 3, total: 21 })
+  })
+
   it('enriches results with step descriptions, including nested branch results', () => {
-    const approvedFlow = createSyncFlow<{ label: string }, { amount: number; route: 'approved' | 'rejected' }>().step(
+    const approvedFlow = createSyncFlow<{ label: string }>(
       'APP-1',
       { label: 'Approve request' },
-      ({ amount }) => ({
+      ({ amount }: { amount: number; route: 'approved' | 'rejected' }) => ({
         approvedTotal: amount + 1,
       })
     )
 
-    const rejectedFlow = createSyncFlow<{ label: string }, { amount: number; route: 'approved' | 'rejected' }>().step(
+    const rejectedFlow = createSyncFlow<{ label: string }>(
       'REJ-1',
       { label: 'Reject request' },
-      () => ({
-        rejectionCode: 'manual-review',
+      ({ amount }: { amount: number; route: 'approved' | 'rejected' }) => ({
+        rejectionCode: amount > 0 ? 'manual-review' : 'auto-review',
       })
     )
 
-    const flow = createSyncFlow<{ label: string }, { amount: number; route: 'approved' | 'rejected' }>()
-      .branch('BR-1', { label: 'Route request' }, ({ route }) => route, {
+    const flow = createSyncFlow<{ label: string }>(
+      'BR-1',
+      { label: 'Route request' },
+      ({ route }: { amount: number; route: 'approved' | 'rejected' }) => route,
+      {
         approved: approvedFlow,
         rejected: rejectedFlow,
-      })
+      }
+    )
       .step('AFTER', { label: 'Continue parent flow' }, () => ({
         parentCompleted: true,
       }))
       .build()
 
     const result = flow.run({ amount: 4, route: 'approved' })
-    const enrichedResult = flow.enrichResult(result)
+    const enrichedResult = result.enrichResult()
 
     expect(enrichedResult.stepResults).toEqual([
       {
@@ -278,5 +364,22 @@ describe('structuredFlow core execution', () => {
       },
     ])
     expect(enrichedResult.failedStepIds()).toEqual([])
+  })
+
+  it('supports empty flows and empty enriched results', () => {
+    const flow = createSyncFlow<{ amount: number }>().build()
+
+    const result = flow.run({ amount: 10 })
+    const enrichedResult = result.enrichResult()
+
+    expect(result.ok).toBe(true)
+    expect(result.failedStepIds()).toEqual([])
+    expect(result.finalCtx).toEqual({ amount: 10 })
+    expect(result.stepResults).toEqual([])
+
+    expect(enrichedResult.ok).toBe(true)
+    expect(enrichedResult.failedStepIds()).toEqual([])
+    expect(enrichedResult.finalCtx).toEqual({ amount: 10 })
+    expect(enrichedResult.stepResults).toEqual([])
   })
 })

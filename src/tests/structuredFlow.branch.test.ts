@@ -1,24 +1,161 @@
 import { describe, expect, it } from 'vitest'
 
-import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
 
 describe('FlowBuilder.branch', () => {
-  it('runs a selected sync branch and keeps child ctx out of the parent flow ctx', () => {
-    const approvedFlow = createSyncFlow<{ amount: number; route: 'approved' | 'rejected' }>()
-      .step('APP-1', 'Approve request', ({ amount }) => ({
-        approvedTotal: amount + 1,
-      }))
+  it('supports createSyncFlow<StepDescription, Info>(id, description, select, branches) as the first branch', () => {
+    type StepMeta = { label: string }
+    type InfoMeta = { reason: string }
 
-    const rejectedFlow = createSyncFlow<{ amount: number; route: 'approved' | 'rejected' }>()
-      .step('REJ-1', 'Reject request', () => ({
-        rejectionCode: 'manual-review',
-      }))
+    const approvedFlow = createSyncFlow<StepMeta, InfoMeta>('APP-1', { label: 'Approve request' }, () => ({
+      approved: true,
+    }))
 
-    const flow = createSyncFlow<{ amount: number; route: 'approved' | 'rejected' }>()
-      .branch('BR-1', 'Route request', ({ route }) => route, {
+    const rejectedFlow = createSyncFlow<StepMeta, InfoMeta>('REJ-1', { label: 'Reject request' }, () => ({
+      rejected: true,
+    }))
+
+    const flow = createSyncFlow<StepMeta, InfoMeta>(
+      'BR-1',
+      { label: 'Route request' },
+      ({ route }: { route: 'approved' | 'rejected' }) => route,
+      {
         approved: approvedFlow,
         rejected: rejectedFlow,
+      }
+    )
+      .step('AFTER', { label: 'After branch' }, () => ({
+        parentCompleted: true,
+      }))
+      .build()
+
+    const result = flow.run({ route: 'approved' })
+
+    expect(flow.steps).toMatchObject([
+      { id: 'BR-1', description: { label: 'Route request' } },
+      { id: 'AFTER', description: { label: 'After branch' } },
+    ])
+    expect(result.stepResults).toEqual([
+      {
+        id: 'BR-1',
+        result: 'ok',
+        branches: [
+          {
+            key: 'approved',
+            result: 'ok',
+            finalCtx: { route: 'approved', approved: true },
+            steps: [{ id: 'APP-1', description: { label: 'Approve request' } }],
+            stepResults: [{ id: 'APP-1', result: 'ok', addToCtx: { approved: true } }],
+          },
+          {
+            key: 'rejected',
+            result: 'skip',
+            finalCtx: { route: 'approved' },
+            steps: [{ id: 'REJ-1', description: { label: 'Reject request' } }],
+            stepResults: [{ id: 'REJ-1', result: 'skip' }],
+          },
+        ],
+      },
+      {
+        id: 'AFTER',
+        result: 'ok',
+        addToCtx: { parentCompleted: true },
+      },
+    ])
+    expect(result.finalCtx).toEqual({ route: 'approved', parentCompleted: true })
+  })
+
+  it('supports createAsyncFlow<StepDescription, Info>(id, description, select, branches) as the first branch', async () => {
+    type StepMeta = { label: string }
+    type InfoMeta = { reason: string }
+
+    const auditFlow = createAsyncFlow<StepMeta, InfoMeta>('AUDIT-1', { label: 'Audit request' }, async () => ({
+      audited: true,
+    }))
+
+    const rulesFlow = createAsyncFlow<StepMeta, InfoMeta>('RULES-1', { label: 'Check rules' }, async () =>
+      stepResult({
+        result: 'error',
+        info: { reason: 'rejected' },
       })
+    )
+
+    const flow = createAsyncFlow<StepMeta, InfoMeta>(
+      'BR-1',
+      { label: 'Run reviews' },
+      ({ mode }: { mode: 'audit' | 'rules' }) => mode,
+      {
+        audit: auditFlow,
+        rules: rulesFlow,
+      }
+    )
+      .step('AFTER', { label: 'After branch' }, async () => ({
+        after: true,
+      }))
+      .build()
+
+    const result = await flow.run({ mode: 'rules' })
+
+    expect(flow.steps).toMatchObject([
+      { id: 'BR-1', description: { label: 'Run reviews' } },
+      { id: 'AFTER', description: { label: 'After branch' } },
+    ])
+    expect(result.stepResults).toEqual([
+      {
+        id: 'BR-1',
+        result: 'error',
+        branches: [
+          {
+            key: 'rules',
+            result: 'error',
+            finalCtx: { mode: 'rules' },
+            steps: [{ id: 'RULES-1', description: { label: 'Check rules' } }],
+            stepResults: [{ id: 'RULES-1', result: 'error', info: { reason: 'rejected' } }],
+          },
+          {
+            key: 'audit',
+            result: 'skip',
+            finalCtx: { mode: 'rules' },
+            steps: [{ id: 'AUDIT-1', description: { label: 'Audit request' } }],
+            stepResults: [{ id: 'AUDIT-1', result: 'skip' }],
+          },
+        ],
+      },
+      {
+        id: 'AFTER',
+        result: 'ok',
+        addToCtx: { after: true },
+      },
+    ])
+    expect(result.finalCtx).toEqual({ mode: 'rules', after: true })
+  })
+
+  it('runs a selected sync branch and keeps child ctx out of the parent flow ctx', () => {
+    const approvedFlow = createSyncFlow(
+      'APP-1',
+      'Approve request',
+      ({ amount }: { amount: number; route: 'approved' | 'rejected' }) => ({
+        approvedTotal: amount + 1,
+      })
+    )
+
+    const rejectedFlow = createSyncFlow(
+      'REJ-1',
+      'Reject request',
+      ({ amount }: { amount: number; route: 'approved' | 'rejected' }) => ({
+        rejectionCode: amount > 0 ? 'manual-review' : 'auto-review',
+      })
+    )
+
+    const flow = createSyncFlow(
+      'BR-1',
+      'Route request',
+      ({ route }: { amount: number; route: 'approved' | 'rejected' }) => route,
+      {
+        approved: approvedFlow,
+        rejected: rejectedFlow,
+      }
+    )
       .step('AFTER', 'Continue parent flow', () => ({
         parentCompleted: true,
       }))
@@ -70,12 +207,16 @@ describe('FlowBuilder.branch', () => {
   })
 
   it('supports direct status selection without running branch flows', () => {
-    const flow = createSyncFlow<{ shouldStop: boolean }>()
-      .branch('BR-STOP', 'Optional branch stop', ({ shouldStop }) => (shouldStop ? 'stop' : 'ok'), {
-        active: createSyncFlow<{ shouldStop: boolean }>()
-          .step('ACTIVE-1', 'Should not run', () => ({ touched: true }))
-          .build(),
-      })
+    const flow = createSyncFlow(
+      'BR-STOP',
+      'Optional branch stop',
+      ({ shouldStop }: { shouldStop: boolean }) => (shouldStop ? 'stop' : 'ok'),
+      {
+        active: createSyncFlow('ACTIVE-1', 'Should not run', ({ shouldStop }: { shouldStop: boolean }) => ({
+          touched: !shouldStop,
+        })).build(),
+      }
+    )
       .step('AFTER', 'Skipped after stop', () => ({
         reached: true,
       }))
@@ -109,16 +250,13 @@ describe('FlowBuilder.branch', () => {
   })
 
   it('fails the branch step when the selector returns an unknown flow key', () => {
-    const knownFlow = createSyncFlow<{ route: string }>()
-      .step('KNOWN-1', 'Known path', () => ({
-        seenKnown: true,
-      }))
-      .build()
+    const knownFlow = createSyncFlow('KNOWN-1', 'Known path', ({ route }: { route: string }) => ({
+      seenKnown: route === 'known',
+    })).build()
 
-    const flow = createSyncFlow<{ route: string }>()
-      .branch('BR-FAIL', 'Fail unknown route', ({ route }) => route as 'known', {
-        known: knownFlow,
-      })
+    const flow = createSyncFlow('BR-FAIL', 'Fail unknown route', ({ route }: { route: string }) => route as 'known', {
+      known: knownFlow,
+    })
       .step('AFTER', 'Skipped after branch exception', () => ({
         reached: true,
       }))
@@ -140,31 +278,42 @@ describe('FlowBuilder.branch', () => {
   })
 
   it('runs multiple async branches and records each branch result separately', async () => {
-    const auditFlow = createAsyncFlow<{ mode: 'all'; amount: number }>()
-      .step('AUDIT-1', 'Audit request', async () => ({ audited: true }))
+    const auditFlow = createAsyncFlow(
+      'AUDIT-1',
+      'Audit request',
+      async ({ amount }: { mode: 'all'; amount: number }) => ({
+        audited: amount > 0,
+      })
+    )
 
-    const rulesFlow = createAsyncFlow<{ mode: 'all'; amount: number }, string>()
-      .step('RULES-1', 'Check rules', async () =>
+    const rulesFlow = createAsyncFlow<string, string>(
+      'RULES-1',
+      'Check rules',
+      async ({ mode }: { mode: 'all'; amount: number }) =>
         stepResult({
-          result: 'error',
+          result: mode === 'all' ? 'error' : 'skip',
           info: 'Rules rejected the request.',
         })
-      )
+    )
 
-    const policyFlow = createAsyncFlow<{ mode: 'all'; amount: number }>()
-      .step('POLICY-1', 'Check policy', async () => ({ policyChecked: true }))
+    const policyFlow = createAsyncFlow(
+      'POLICY-1',
+      'Check policy',
+      async ({ mode }: { mode: 'all'; amount: number }) => ({
+        policyChecked: mode === 'all',
+      })
+    )
 
-    const flow = createAsyncFlow<{ mode: 'all'; amount: number }>()
-      .branch(
-        'BR-MULTI',
-        'Run selected reviews',
-        ({ mode }) => (mode === 'all' ? (['audit', 'rules'] as const) : 'ok'),
-        {
-          audit: auditFlow,
-          rules: rulesFlow,
-          policy: policyFlow,
-        }
-      )
+    const flow = createAsyncFlow(
+      'BR-MULTI',
+      'Run selected reviews',
+      ({ mode }: { mode: 'all'; amount: number }) => (mode === 'all' ? (['audit', 'rules'] as const) : 'ok'),
+      {
+        audit: auditFlow,
+        rules: rulesFlow,
+        policy: policyFlow,
+      }
+    )
       .step('AFTER', 'Parent flow continues after branch errors', async () => ({
         reviewed: true,
       }))
@@ -231,15 +380,19 @@ describe('FlowBuilder.branch', () => {
   })
 
   it('treats an empty branch key array as an exception and skips remaining steps', () => {
-    const flow = createSyncFlow<{ runChecks: boolean }>()
-      .branch('BR-EMPTY', 'No selected checks', () => [], {
-        audit: createSyncFlow<{ runChecks: boolean }>()
-          .step('AUDIT-1', 'Audit', () => ({ audited: true }))
-          .build(),
-        fraud: createSyncFlow<{ runChecks: boolean }>()
-          .step('FRAUD-1', 'Fraud', () => ({ fraudChecked: true }))
-          .build(),
-      })
+    const flow = createSyncFlow(
+      'BR-EMPTY',
+      'No selected checks',
+      ({ runChecks }: { runChecks: boolean }) => (runChecks ? [] : []),
+      {
+        audit: createSyncFlow('AUDIT-1', 'Audit', ({ runChecks }: { runChecks: boolean }) => ({
+          audited: runChecks,
+        })).build(),
+        fraud: createSyncFlow('FRAUD-1', 'Fraud', ({ runChecks }: { runChecks: boolean }) => ({
+          fraudChecked: runChecks,
+        })).build(),
+      }
+    )
       .step('AFTER', 'Skipped after exception', () => ({
         reached: true,
       }))

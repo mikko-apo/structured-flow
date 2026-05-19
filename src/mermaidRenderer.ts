@@ -1,5 +1,5 @@
-import type { FlowLike, FlowStepDefinition, FlowStepResult, StepStatus } from './structuredFlow'
-import { FlowResult } from './structuredFlow'
+import type { FlowLike, FlowStepDefinition, FlowStepResult, StepStatus } from './structuredFlow.ts'
+import { FlowResult } from './structuredFlow.ts'
 
 type MermaidRenderable =
   | Pick<FlowLike<any, any, any>, 'steps'>

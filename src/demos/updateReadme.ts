@@ -1,16 +1,9 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import {
-  createAsyncFlow,
-  createSyncFlow,
-  EnrichedBranchRunResult,
-  EnrichedFlowResult,
-  FlowResult,
-  FlowStepDefinition,
-  stepResult,
-} from '../structuredFlow'
-import { renderProcessAsMermaidGraph } from '../mermaidRenderer'
+import type { EnrichedBranchRunResult, EnrichedFlowResult, FlowResult, FlowStepDefinition } from '../structuredFlow.ts'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
+import { renderProcessAsMermaidGraph } from '../mermaidRenderer.ts'
 
 const demoSourceMarkerPrefix = 'structured-process-demo-example'
 const structuredStepDescriptionSourceMarkerPrefix = 'structured-step-description-example'
@@ -63,8 +56,7 @@ async function crossCheckFormAndOccupancies({ form }: { form: SubmittedForm; occ
   })
 }
 
-const sequence = createAsyncFlow<{ form: SubmittedForm }, string>()
-  .step('IC10', 'Get linked occupancy records', getOccupancies)
+const sequence = createAsyncFlow('IC10', 'Get linked occupancy records', getOccupancies)
   .step('IC25', 'Count the recovered occupancy trail and insist on exactly two records', verifyOccupancyCount)
   .step('IC30', 'Cross-check the submitted form against the recovered occupancy trail', crossCheckFormAndOccupancies)
   .build()
@@ -77,26 +69,29 @@ type StepMeta = {
   severity: 'low' | 'high'
 }
 
-const autoReviewFlow = createSyncFlow<StepMeta, { amount: number; normalizedAmount: number }, unknown>().step(
+const autoReviewFlow = createSyncFlow(
   'AUTO-1',
   { label: 'Auto approve', area: 'risk', severity: 'low' },
-  () => ({
-    autoApproved: true,
+  ({ amount, normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
+    autoApproved: normalizedAmount <= Math.abs(amount),
   })
 )
 
-const manualReviewFlow = createSyncFlow<StepMeta, { amount: number; normalizedAmount: number }, unknown>().step(
+const manualReviewFlow = createSyncFlow(
   'MANUAL-1',
   { label: 'Manual review', area: 'risk', severity: 'high' },
-  () => ({
-    queuedForReview: true,
+  ({ normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
+    queuedForReview: normalizedAmount > 1000,
   })
 )
 
-const structuredStepDescriptionFlow = createSyncFlow<StepMeta, { amount: number }, unknown>()
-  .step('VALIDATE', { label: 'Validate amount', area: 'billing', severity: 'high' }, ({ amount }) => ({
+const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
+  'VALIDATE',
+  { label: 'Validate amount', area: 'billing', severity: 'high' },
+  ({ amount }) => ({
     normalizedAmount: Math.abs(amount),
-  }))
+  })
+)
   .branch(
     'ROUTE',
     { label: 'Route review', area: 'risk', severity: 'low' },
@@ -112,135 +107,143 @@ const structuredStepDescriptionFlow = createSyncFlow<StepMeta, { amount: number 
 /* branch-one-of-three-example:start */
 type PostingKind = 'income' | 'expense' | 'transfer'
 
-const incomeFlow = createSyncFlow<{ amount: number; kind: PostingKind }>().step(
-  'IN-1',
-  'Handle income',
-  ({ amount }) => ({
-    normalizedAmount: amount,
-  })
-)
-
-const expenseFlow = createSyncFlow<{ amount: number; kind: PostingKind }>().step(
-  'EX-1',
-  'Handle expense',
-  ({ amount }) => ({
-    normalizedAmount: -amount,
-  })
-)
-
-const transferFlow = createSyncFlow<{ amount: number; kind: PostingKind }>().step('TR-1', 'Handle transfer', () => ({
-  transferSeen: true,
+const incomeFlow = createSyncFlow('IN-1', 'Handle income', ({ amount }: { amount: number; kind: PostingKind }) => ({
+  normalizedAmount: amount,
 }))
 
-const oneOfThreeBranchFlow = createSyncFlow<{ amount: number; kind: PostingKind }>()
-  .branch('ROUTE', 'Route posting kind', ({ kind }) => kind, {
+const expenseFlow = createSyncFlow('EX-1', 'Handle expense', ({ amount }: { amount: number; kind: PostingKind }) => ({
+  normalizedAmount: -amount,
+}))
+
+const transferFlow = createSyncFlow('TR-1', 'Handle transfer', ({ kind }: { amount: number; kind: PostingKind }) => ({
+  transferSeen: kind === 'transfer',
+}))
+
+const oneOfThreeBranchFlow = createSyncFlow(
+  'ROUTE',
+  'Route posting kind',
+  ({ kind }: { amount: number; kind: PostingKind }) => kind,
+  {
     income: incomeFlow,
     expense: expenseFlow,
     transfer: transferFlow,
-  })
-  .build()
+  }
+).build()
 /* branch-one-of-three-example:end */
 
 /* branch-two-of-three-example:start */
 type CheckName = 'tax' | 'fraud' | 'policy'
 
-const taxFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }>().step('TAX-1', 'Check taxes', async () => ({
-  taxChecked: true,
-}))
+const taxFlow = createAsyncFlow(
+  'TAX-1',
+  'Check taxes',
+  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
+    taxChecked: checks.includes('tax'),
+  })
+)
 
-const fraudFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }, string>().step(
+const fraudFlow = createAsyncFlow(
   'FRAUD-1',
   'Check fraud',
-  async () =>
+  async ({ checks }: { amount: number; checks: CheckName[] }) =>
     stepResult({
-      result: 'error',
+      result: checks.includes('fraud') ? 'error' : 'skip',
       info: 'Fraud review failed.',
     })
 )
 
-const policyFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }>().step(
+const policyFlow = createAsyncFlow(
   'POLICY-1',
   'Check policy',
-  async () => ({
-    policyChecked: true,
+  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
+    policyChecked: checks.includes('policy'),
   })
 )
 
-const twoOfThreeBranchFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }>()
-  .branch('CHECKS', 'Run selected checks', ({ checks }) => checks, {
+const twoOfThreeBranchFlow = createAsyncFlow(
+  'CHECKS',
+  'Run selected checks',
+  ({ checks }: { amount: number; checks: CheckName[] }) => checks,
+  {
     tax: taxFlow,
     fraud: fraudFlow,
     policy: policyFlow,
-  })
-  .build()
+  }
+).build()
 /* branch-two-of-three-example:end */
 
 /* nested-branch-example:start */
 type FirstBranch = 'A' | 'B'
 type SecondBranch = 'C' | 'D'
 
-const branchAFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().step(
+const branchAFlow = createSyncFlow(
   'A-1',
   'Handle A',
-  () => ({
-    visitedA: true,
+  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
+    visitedA: firstBranch === 'A',
   })
 )
 
-const branchCFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().step(
+const branchCFlow = createSyncFlow(
   'C-1',
   'Handle C',
-  () => ({
-    visitedC: true,
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
+    visitedC: secondBranch === 'C',
   })
 )
 
-const branchDFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().step(
+const branchDFlow = createSyncFlow(
   'D-1',
   'Handle D',
-  () => ({
-    visitedD: true,
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
+    visitedD: secondBranch === 'D',
   })
 )
 
-const branchBFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().branch(
+const branchBFlow = createSyncFlow(
   'B-ROUTE',
   'Route second branch',
-  ({ secondBranch }) => secondBranch,
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => secondBranch,
   {
     C: branchCFlow,
     D: branchDFlow,
   }
 )
 
-const nestedBranchFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .branch('ROOT-ROUTE', 'Route first branch', ({ firstBranch }) => firstBranch, {
+const nestedBranchFlow = createSyncFlow(
+  'ROOT-ROUTE',
+  'Route first branch',
+  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => firstBranch,
+  {
     A: branchAFlow,
     B: branchBFlow,
-  })
-  .build()
+  }
+).build()
 /* nested-branch-example:end */
 
 /* branch-skip-example:start */
-const approveFlow = createSyncFlow<{ shouldRunChecks: boolean }>().step('APP-1', 'Approve', () => ({
-  approved: true,
+const approveFlow = createSyncFlow('APP-1', 'Approve', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
+  approved: !shouldRunChecks,
 }))
 
-const rejectFlow = createSyncFlow<{ shouldRunChecks: boolean }>().step('REJ-1', 'Reject', () => ({
-  rejected: true,
+const rejectFlow = createSyncFlow('REJ-1', 'Reject', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
+  rejected: !shouldRunChecks,
 }))
 
-const reviewFlow = createSyncFlow<{ shouldRunChecks: boolean }>().step('REV-1', 'Review', () => ({
-  reviewed: true,
+const reviewFlow = createSyncFlow('REV-1', 'Review', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
+  reviewed: shouldRunChecks,
 }))
 
-const skippedBranchFlow = createSyncFlow<{ shouldRunChecks: boolean }>()
-  .branch('OPTIONAL-CHECKS', 'Optionally run checks', ({ shouldRunChecks }) => (shouldRunChecks ? 'review' : 'skip'), {
+const skippedBranchFlow = createSyncFlow(
+  'OPTIONAL-CHECKS',
+  'Optionally run checks',
+  ({ shouldRunChecks }: { shouldRunChecks: boolean }) => (shouldRunChecks ? 'review' : 'skip'),
+  {
     approve: approveFlow,
     reject: rejectFlow,
     review: reviewFlow,
-  })
-  .build()
+  }
+).build()
 /* branch-skip-example:end */
 
 function escapeMarkdownCodeBlock(value: string): string {
@@ -271,7 +274,7 @@ function truncate(value: string, maxLength = 160): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`
 }
 
-function describeFunction(fn: Function) {
+function describeFunction(fn: { toString(): string }) {
   const source = fn.toString().trim()
   const normalized = source.replace(/\s+/g, ' ')
   const isAsync = normalized.startsWith('async ')
@@ -567,7 +570,7 @@ function replaceKeyToMarkerId(replaceKey: string): string {
 type GeneratedExample<InitialCtx extends object> = {
   codePlaceholder: string
   codeMarkerPrefix: string
-  flow: FlowLike<InitialCtx> & { enrichResult(result: FlowResult<any, any>): EnrichedFlowResult<any, any> }
+  flow: FlowLike<InitialCtx>
   flowJsonPlaceholder?: string
   demoPlaceholder: string
   demoInit: InitialCtx
@@ -586,7 +589,7 @@ async function renderGeneratedExample<InitialCtx extends object>(
 ): Promise<string> {
   const exampleCode = readCodeBlockFromSource(codeMarkerPrefix)
   const result = await flow.run(demoInit)
-  const enrichedResult = flow.enrichResult(result)
+  const enrichedResult = result.enrichResult()
   const markdownWithCode = markdown.replace(
     `{{${codePlaceholder}}}`,
     ['```ts', escapeMarkdownCodeBlock(exampleCode), '```'].join('\n')
@@ -606,7 +609,7 @@ async function renderGeneratedExample<InitialCtx extends object>(
 }
 
 async function renderStructuredProcessExampleMarkdown<InitialCtx extends object>(
-  sequence: FlowLike<InitialCtx> & { enrichResult(result: FlowResult<any, any>): EnrichedFlowResult<any, any> },
+  sequence: FlowLike<InitialCtx>,
   demoFlowInits: Record<string, InitialCtx>
 ): Promise<string> {
   const templateFile = join(dirname(fileURLToPath(import.meta.url)), 'structuredFlowDemo.readme.template.md')
@@ -618,7 +621,7 @@ async function renderStructuredProcessExampleMarkdown<InitialCtx extends object>
     .replace(
       '{{STATIC_GRAPH_SECTION}}',
       renderThreeColumnHtml(
-        '<p><strong>Result JSON</strong><br>Static sequence view does not have a run result yet.</p>',
+        '<p><strong>Result JSON</strong><br>No run result yet.</p>',
         renderMarkdownPane(renderMermaidBlock('static-graph', renderProcessAsMermaidGraph(sequence))),
         renderFlowTable('static-graph', sequence)
       )
@@ -626,7 +629,7 @@ async function renderStructuredProcessExampleMarkdown<InitialCtx extends object>
 
   for (const [replaceKey, sequenceInit] of Object.entries(demoFlowInits)) {
     const result = await sequence.run(sequenceInit)
-    const enrichedResult = sequence.enrichResult(result)
+    const enrichedResult = result.enrichResult()
     markdown = markdown.replace(
       `{{${replaceKey}}}`,
       renderDemoResultSection(replaceKeyToMarkerId(replaceKey), sequenceInit, result, enrichedResult)

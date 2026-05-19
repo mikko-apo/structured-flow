@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { writeStructuredProcessExampleMarkdown } from '../demos/updateReadme'
+import { writeStructuredProcessExampleMarkdown } from '../demos/updateReadme.ts'
 
 function sliceBetween(value: string, startMarker: string, endMarker: string): string {
   const startIndex = value.indexOf(startMarker)

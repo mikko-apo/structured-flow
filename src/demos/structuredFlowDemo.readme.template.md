@@ -1,79 +1,116 @@
 # structured-flow
 
-Need to manage hundreds of business logic validation rules in code? Tired of scattered docs and complex code?
-structured-flow helps you structure logic and visualize execution.
+Model business rules or validation steps with code in a structured way.
 
 <!-- TOC -->
+* [structured-flow](#structured-flow)
+* [Core API surface](#core-api-surface)
+  * [Flow And Step Execution](#flow-and-step-execution)
+  * [Handling results](#handling-results)
+  * [Rendering results](#rendering-results)
+* [Code examples](#code-examples)
+  * [Structured StepDescription](#structured-stepdescription)
+  * [Step results and execution visualized](#step-results-and-execution-visualized)
+    * [Flow](#flow)
+    * [Static Graph](#static-graph)
+    * [Passing Demo](#passing-demo)
+    * [Failing Demo](#failing-demo)
+    * [Stop Demo](#stop-demo)
+    * [Exception Demo](#exception-demo)
+  * [branch() examples](#branch-examples)
+    * [One Of Three Branches](#one-of-three-branches)
+    * [Two Of Three Branches](#two-of-three-branches)
+    * [Nested Branch](#nested-branch)
+    * [Skipped Branch](#skipped-branch)
+<!-- TOC -->
 
-- [structured-flow](#structured-flow)
-- [Structured Flow API Example](#structured-flow-api-example)
-  - [Flow And Step Execution](#flow-and-step-execution)
-  - [Code examples](#code-examples)
-    - [Structured StepDescription](#structured-stepdescription)
-    - [Step results and execution visualized](#step-results-and-execution-visualized)
-      - [Flow](#flow)
-      - [Static Graph](#static-graph)
-      - [Passing Demo](#passing-demo)
-      - [Failing Demo](#failing-demo)
-      - [Stop Demo](#stop-demo)
-      - [Exception Demo](#exception-demo)
-    - [branch() examples](#branch-examples)
-      - [One Of Three Branches](#one-of-three-branches)
-      - [Two Of Three Branches](#two-of-three-branches)
-      - [Nested Branch](#nested-branch)
-      - [Skipped Branch](#skipped-branch)
-  <!-- TOC -->
+# Core API
 
-# Structured Flow API Example
+```ts
+type SubmittedForm = { id: string }
+type Occupancy = { id: string }
 
-This example shows the intended flow of the sequence API and two concrete runs of the same sequence.
+function getOccupancies(_ctx: { form: SubmittedForm }) {
+  return {
+    occupancies: [] as Occupancy[],
+  }
+}
 
-- `createSyncFlow<StepDescription, InitialCtx, Info>()` starts a builder that accepts only synchronous step functions. `StepDescription` defaults to `string`.
-- `createAsyncFlow<StepDescription, InitialCtx, Info>()` starts a builder that accepts synchronous or async step functions. `StepDescription` defaults to `string`.
-- `.step(id, stepDescription, fn)` appends a step that can extend ctx and return structured step results.
-- `.branch(id, stepDescription, select, branches)` appends a branch step that runs one or more child flows selected from `branches`.
-- `.build()` returns a sequence with a single `run()` method.
-- `FlowResult` contains the `finalCtx`, per-step results, and helper methods like `failedStepIds()`.
-- `renderProcessAsMermaidGraph(...)` can render a builder, sequence, or executed sequence result.
+function verifyOccupancyCount(_ctx: { form: SubmittedForm; occupancies: Occupancy[] }) {
+  return stepResult({
+    result: 'ok',
+    info: 'Count looks good.',
+  })
+}
 
+async function crossCheckFormAndOccupancies(_ctx: { form: SubmittedForm; occupancies: Occupancy[] }) {
+  return stepResult({
+    result: 'ok',
+    info: 'Cross-check passed.',
+  })
+}
+
+// Ctx is inferred from the first step function parameter. Here it becomes `{ form: SubmittedForm }`.
+const validations = createAsyncFlow('IC10', 'Get linked occupancy records', getOccupancies)
+  // Fields returned from a step are added to the ctx for following steps when the result is `ok` or `stop`.
+  // `getOccupancies()` adds `occupancies`, so later steps receive `{ form, occupancies }`.
+  .step('IC25', 'Count the recovered occupancy trail', verifyOccupancyCount)
+  .step('IC30', 'Cross-check the submitted form against the occupancy trail', crossCheckFormAndOccupancies)
+  .build()
+
+// run() returns `FlowResult` which can be used to inspect the results
+const result = await validations.run({form: {id: '200'}})
+
+if (!result.ok) {
+  throw new Error(`Validation failed: ${result.failedStepIds().join(', ')}`)
+}
+```
 ## Flow And Step Execution
 
-For a sequence built with `createSyncFlow()`, `run(initialCtx)` executes immediately and returns a
-`FlowResult`. For a sequence built with `createAsyncFlow()`, `run(initialCtx)` awaits each step in order and
-returns `Promise<FlowResult>`.
+Each step receives the initial or acculated context object and each step function returns a `StepResult`.
 
-When a sequence starts, it copies the initial context and executes steps in order. Each step function receives the
-current context and returns a structured step result object. That return object can contain:
+`StepResult` contains the following fields:
+- `result` controls execution of the flow and the execution of the following steps
+  - `ok` or undefined mean that the step was completed successfully.
+  - `error` means that the step failed and execution continues.
+  - Thrown errors are recorded as `exception`m but exception can be returned with code also
+  - `stop` means that the step failed and execution stops.
+  - `skip` does not continue
+- `info` is copied into `stepResults`
+- other returned fields are added to the ctx
 
-- `result` to control execution flow
-- `info` to record step metadata into `stepResults`
-- additional fields that are recorded as `addToCtx` and merged into `finalCtx` only when the result is `ok` or `stop`
+A branch step calls the selector function and can return one key, many keys, or a direct status like `skip`, `error`, `stop`, or
+`exception`. Child flows run from the parent ctx, but their ctx additions stay inside the branch result.
 
-Execution continues through `ok`, `error`, and explicit `skip` results. Execution stops early on `stop` or
-`exception`, and all remaining steps are recorded as `skip`. If a step throws, the sequence catches it, records that
-step as `exception`, and then marks the remaining steps as `skip`.
+The table below shows how each recorded `result` affects execution and ctx updates:
 
-Branch steps call `select(ctx)` to choose which child flow or flows to run. `select` can return a single branch key,
-multiple keys, or a direct step result value like `skip`, `error`, `stop`, or `exception`. Returning an unknown key
-fails the branch step. Child flows always start from the parent step's current ctx, but their added ctx fields stay
-inside the child flow result and are not merged back into the parent ctx. Nested child step results are recorded under
-the parent step result's `branches` array.
+| Result value      | Step executed | Flow continues | Returned fields added to context | Remaining steps auto-recorded as `skip` |
+|-------------------|---------------|----------------|----------------------------------|-----------------------------------------|
+| `ok` or undefined | yes           | yes            | yes                              | no                                      |
+| `error`           | yes           | yes            | no                               | no                                      |
+| `stop`            | yes           | no             | yes                              | yes                                     |
+| `exception`       | yes           | no             | no                               | yes                                     |
+| `skip`            | sometimes     | yes            | no                               | no                                      |
 
-The table below summarizes how each recorded `result` value affects execution and context updates:
+## Handling results
 
-| Result value | Step executed | Flow continues | Returned fields added to context | Remaining steps auto-recorded as `skip` |
-| ------------ | ------------- | -------------- | -------------------------------- | --------------------------------------- |
-| `ok`         | yes           | yes            | yes                              | no                                      |
-| `error`      | yes           | yes            | no                               | no                                      |
-| `stop`       | yes           | no             | yes                              | yes                                     |
-| `exception`  | yes           | no             | no                               | yes                                     |
-| `skip`       | sometimes     | yes            | no                               | no                                      |
+- `FlowResult` exposes `ok`, `finalCtx`, `stepResults`, and `failedStepIds()`.
+- Use `result.ok` for the top-level pass/fail check.
+- Use `result.failedStepIds()` to list the failed step ids.
+- Each `stepResult` records `id`, `result`, optional `info`, optional `addToCtx`, and optional nested `branches`.
+- `result.enrichResult()` returns an enriched results object which contains the step's `description` to each recorded step result, including nested branch results.
+
+## Rendering results
+
+- `renderProcessAsMermaidGraph(flow)` renders a static graph from a builder or built flow.
+- `renderProcessAsMermaidGraph(result)` renders an executed graph with step statuses and `info`.
 
 # Code examples
 
 ## Structured StepDescription
 
-This example uses an object-valued `StepDescription` for both `step()` and `branch()`.
+This example uses an object-valued `StepDescription` for both `step()` and `branch()`. The generated JSON below shows
+the stored flow definition.
 
 {{STRUCTURED_STEP_DESCRIPTION_CODE_BLOCK}}
 
@@ -87,25 +124,37 @@ This example uses an object-valued `StepDescription` for both `step()` and `bran
 
 ### Flow
 
+This is the source flow used by the graph and run examples below.
+
 {{SEQUENCE_CODE_BLOCK}}
 
 ### Static Graph
+
+This is the same flow before execution.
 
 {{STATIC_GRAPH_SECTION}}
 
 ### Passing Demo
 
+Happy path: every step runs and the flow ends with `ok`.
+
 {{PASSING_DEMO_SECTION}}
 
 ### Failing Demo
+
+A step returns `error`. Execution continues, but the overall result is failed.
 
 {{FAILING_DEMO_SECTION}}
 
 ### Stop Demo
 
+A step returns `stop`, so later steps are recorded as `skip`.
+
 {{STOP_DEMO_SECTION}}
 
 ### Exception Demo
+
+An exception ends the flow immediately and marks the rest as `skip`.
 
 {{EXCEPTION_DEMO_SECTION}}
 
@@ -113,7 +162,7 @@ This example uses an object-valued `StepDescription` for both `step()` and `bran
 
 ### One Of Three Branches
 
-Select one branch from three.
+Selector returns one branch key.
 
 {{BRANCH_ONE_OF_THREE_CODE_BLOCK}}
 
@@ -121,7 +170,7 @@ Select one branch from three.
 
 ### Two Of Three Branches
 
-Select two branches and record each result.
+Selector returns multiple branch keys.
 
 {{BRANCH_TWO_OF_THREE_CODE_BLOCK}}
 
@@ -129,7 +178,7 @@ Select two branches and record each result.
 
 ### Nested Branch
 
-Select `B`, then `D` inside `B`.
+A branch can route into another branch flow.
 
 {{NESTED_BRANCH_CODE_BLOCK}}
 
@@ -137,7 +186,7 @@ Select `B`, then `D` inside `B`.
 
 ### Skipped Branch
 
-Return `skip` directly from the selector.
+Selector returns 'skip' status instead of branch keys.
 
 {{BRANCH_SKIP_CODE_BLOCK}}
 

@@ -1,79 +1,116 @@
 # structured-flow
 
-Need to manage hundreds of business logic validation rules in code? Tired of scattered docs and complex code?
-structured-flow helps you structure logic and visualize execution.
+Model business rules or validation steps with code in a structured way.
 
 <!-- TOC -->
+* [structured-flow](#structured-flow)
+* [Core API surface](#core-api-surface)
+  * [Flow And Step Execution](#flow-and-step-execution)
+  * [Handling results](#handling-results)
+  * [Rendering results](#rendering-results)
+* [Code examples](#code-examples)
+  * [Structured StepDescription](#structured-stepdescription)
+  * [Step results and execution visualized](#step-results-and-execution-visualized)
+    * [Flow](#flow)
+    * [Static Graph](#static-graph)
+    * [Passing Demo](#passing-demo)
+    * [Failing Demo](#failing-demo)
+    * [Stop Demo](#stop-demo)
+    * [Exception Demo](#exception-demo)
+  * [branch() examples](#branch-examples)
+    * [One Of Three Branches](#one-of-three-branches)
+    * [Two Of Three Branches](#two-of-three-branches)
+    * [Nested Branch](#nested-branch)
+    * [Skipped Branch](#skipped-branch)
+<!-- TOC -->
 
-- [structured-flow](#structured-flow)
-- [Structured Flow API Example](#structured-flow-api-example)
-  - [Flow And Step Execution](#flow-and-step-execution)
-  - [Code examples](#code-examples)
-    - [Structured StepDescription](#structured-stepdescription)
-    - [Step results and execution visualized](#step-results-and-execution-visualized)
-      - [Flow](#flow)
-      - [Static Graph](#static-graph)
-      - [Passing Demo](#passing-demo)
-      - [Failing Demo](#failing-demo)
-      - [Stop Demo](#stop-demo)
-      - [Exception Demo](#exception-demo)
-    - [branch() examples](#branch-examples)
-      - [One Of Three Branches](#one-of-three-branches)
-      - [Two Of Three Branches](#two-of-three-branches)
-      - [Nested Branch](#nested-branch)
-      - [Skipped Branch](#skipped-branch)
-  <!-- TOC -->
+# Core API
 
-# Structured Flow API Example
+```ts
+type SubmittedForm = { id: string }
+type Occupancy = { id: string }
 
-This example shows the intended flow of the sequence API and two concrete runs of the same sequence.
+function getOccupancies(_ctx: { form: SubmittedForm }) {
+  return {
+    occupancies: [] as Occupancy[],
+  }
+}
 
-- `createSyncFlow<StepDescription, InitialCtx, Info>()` starts a builder that accepts only synchronous step functions. `StepDescription` defaults to `string`.
-- `createAsyncFlow<StepDescription, InitialCtx, Info>()` starts a builder that accepts synchronous or async step functions. `StepDescription` defaults to `string`.
-- `.step(id, stepDescription, fn)` appends a step that can extend ctx and return structured step results.
-- `.branch(id, stepDescription, select, branches)` appends a branch step that runs one or more child flows selected from `branches`.
-- `.build()` returns a sequence with a single `run()` method.
-- `FlowResult` contains the `finalCtx`, per-step results, and helper methods like `failedStepIds()`.
-- `renderProcessAsMermaidGraph(...)` can render a builder, sequence, or executed sequence result.
+function verifyOccupancyCount(_ctx: { form: SubmittedForm; occupancies: Occupancy[] }) {
+  return stepResult({
+    result: 'ok',
+    info: 'Count looks good.',
+  })
+}
 
+async function crossCheckFormAndOccupancies(_ctx: { form: SubmittedForm; occupancies: Occupancy[] }) {
+  return stepResult({
+    result: 'ok',
+    info: 'Cross-check passed.',
+  })
+}
+
+// Ctx is inferred from the first step function parameter. Here it becomes `{ form: SubmittedForm }`.
+const validations = createAsyncFlow('IC10', 'Get linked occupancy records', getOccupancies)
+  // Fields returned from a step are added to the ctx for following steps when the result is `ok` or `stop`.
+  // `getOccupancies()` adds `occupancies`, so later steps receive `{ form, occupancies }`.
+  .step('IC25', 'Count the recovered occupancy trail', verifyOccupancyCount)
+  .step('IC30', 'Cross-check the submitted form against the occupancy trail', crossCheckFormAndOccupancies)
+  .build()
+
+// run() returns `FlowResult` which can be used to inspect the results
+const result = await validations.run({form: {id: '200'}})
+
+if (!result.ok) {
+  throw new Error(`Validation failed: ${result.failedStepIds().join(', ')}`)
+}
+```
 ## Flow And Step Execution
 
-For a sequence built with `createSyncFlow()`, `run(initialCtx)` executes immediately and returns a
-`FlowResult`. For a sequence built with `createAsyncFlow()`, `run(initialCtx)` awaits each step in order and
-returns `Promise<FlowResult>`.
+Each step receives the initial or acculated context object and each step function returns a `StepResult`.
 
-When a sequence starts, it copies the initial context and executes steps in order. Each step function receives the
-current context and returns a structured step result object. That return object can contain:
+`StepResult` contains the following fields:
+- `result` controls execution of the flow and the execution of the following steps
+  - `ok` or undefined mean that the step was completed successfully.
+  - `error` means that the step failed and execution continues.
+  - Thrown errors are recorded as `exception`m but exception can be returned with code also
+  - `stop` means that the step failed and execution stops.
+  - `skip` does not continue
+- `info` is copied into `stepResults`
+- other returned fields are added to the ctx
 
-- `result` to control execution flow
-- `info` to record step metadata into `stepResults`
-- additional fields that are recorded as `addToCtx` and merged into `finalCtx` only when the result is `ok` or `stop`
+A branch step calls the selector function and can return one key, many keys, or a direct status like `skip`, `error`, `stop`, or
+`exception`. Child flows run from the parent ctx, but their ctx additions stay inside the branch result.
 
-Execution continues through `ok`, `error`, and explicit `skip` results. Execution stops early on `stop` or
-`exception`, and all remaining steps are recorded as `skip`. If a step throws, the sequence catches it, records that
-step as `exception`, and then marks the remaining steps as `skip`.
+The table below shows how each recorded `result` affects execution and ctx updates:
 
-Branch steps call `select(ctx)` to choose which child flow or flows to run. `select` can return a single branch key,
-multiple keys, or a direct step result value like `skip`, `error`, `stop`, or `exception`. Returning an unknown key
-fails the branch step. Child flows always start from the parent step's current ctx, but their added ctx fields stay
-inside the child flow result and are not merged back into the parent ctx. Nested child step results are recorded under
-the parent step result's `branches` array.
+| Result value      | Step executed | Flow continues | Returned fields added to context | Remaining steps auto-recorded as `skip` |
+|-------------------|---------------|----------------|----------------------------------|-----------------------------------------|
+| `ok` or undefined | yes           | yes            | yes                              | no                                      |
+| `error`           | yes           | yes            | no                               | no                                      |
+| `stop`            | yes           | no             | yes                              | yes                                     |
+| `exception`       | yes           | no             | no                               | yes                                     |
+| `skip`            | sometimes     | yes            | no                               | no                                      |
 
-The table below summarizes how each recorded `result` value affects execution and context updates:
+## Handling results
 
-| Result value | Step executed | Flow continues | Returned fields added to context | Remaining steps auto-recorded as `skip` |
-| ------------ | ------------- | -------------- | -------------------------------- | --------------------------------------- |
-| `ok`         | yes           | yes            | yes                              | no                                      |
-| `error`      | yes           | yes            | no                               | no                                      |
-| `stop`       | yes           | no             | yes                              | yes                                     |
-| `exception`  | yes           | no             | no                               | yes                                     |
-| `skip`       | sometimes     | yes            | no                               | no                                      |
+- `FlowResult` exposes `ok`, `finalCtx`, `stepResults`, and `failedStepIds()`.
+- Use `result.ok` for the top-level pass/fail check.
+- Use `result.failedStepIds()` to list the failed step ids.
+- Each `stepResult` records `id`, `result`, optional `info`, optional `addToCtx`, and optional nested `branches`.
+- `result.enrichResult()` returns an enriched results object which contains the step's `description` to each recorded step result, including nested branch results.
+
+## Rendering results
+
+- `renderProcessAsMermaidGraph(flow)` renders a static graph from a builder or built flow.
+- `renderProcessAsMermaidGraph(result)` renders an executed graph with step statuses and `info`.
 
 # Code examples
 
 ## Structured StepDescription
 
-This example uses an object-valued `StepDescription` for both `step()` and `branch()`.
+This example uses an object-valued `StepDescription` for both `step()` and `branch()`. The generated JSON below shows
+the stored flow definition.
 
 ```ts
 type StepMeta = {
@@ -82,26 +119,29 @@ type StepMeta = {
   severity: 'low' | 'high'
 }
 
-const autoReviewFlow = createSyncFlow<StepMeta, { amount: number; normalizedAmount: number }, unknown>().step(
+const autoReviewFlow = createSyncFlow(
   'AUTO-1',
   { label: 'Auto approve', area: 'risk', severity: 'low' },
-  () => ({
-    autoApproved: true,
+  ({ amount, normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
+    autoApproved: normalizedAmount <= Math.abs(amount),
   })
 )
 
-const manualReviewFlow = createSyncFlow<StepMeta, { amount: number; normalizedAmount: number }, unknown>().step(
+const manualReviewFlow = createSyncFlow(
   'MANUAL-1',
   { label: 'Manual review', area: 'risk', severity: 'high' },
-  () => ({
-    queuedForReview: true,
+  ({ normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
+    queuedForReview: normalizedAmount > 1000,
   })
 )
 
-const structuredStepDescriptionFlow = createSyncFlow<StepMeta, { amount: number }, unknown>()
-  .step('VALIDATE', { label: 'Validate amount', area: 'billing', severity: 'high' }, ({ amount }) => ({
+const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
+  'VALIDATE',
+  { label: 'Validate amount', area: 'billing', severity: 'high' },
+  ({ amount }) => ({
     normalizedAmount: Math.abs(amount),
-  }))
+  })
+)
   .branch(
     'ROUTE',
     { label: 'Route review', area: 'risk', severity: 'low' },
@@ -145,7 +185,7 @@ const structuredStepDescriptionFlow = createSyncFlow<StepMeta, { amount: number 
         &quot;kind&quot;: &quot;arrow-function&quot;,
         &quot;async&quot;: false,
         &quot;params&quot;: &quot;(ctx)&quot;,
-        &quot;bodyPreview&quot;: &quot;runBranchSync( id, ctx, selectBranches, normalizedBranches )&quot;
+        &quot;bodyPreview&quot;: &quot;runBranchSync(id, ctx, selectBranches, normalizedBranches)&quot;
       }
     }
   ],
@@ -338,6 +378,8 @@ end"]
 
 ### Flow
 
+This is the source flow used by the graph and run examples below.
+
 ```ts
 type SubmittedForm = { id: string }
 type Occupancy = { id: string }
@@ -382,8 +424,7 @@ async function crossCheckFormAndOccupancies({ form }: { form: SubmittedForm; occ
   })
 }
 
-const sequence = createAsyncFlow<{ form: SubmittedForm }, string>()
-  .step('IC10', 'Get linked occupancy records', getOccupancies)
+const sequence = createAsyncFlow('IC10', 'Get linked occupancy records', getOccupancies)
   .step('IC25', 'Count the recovered occupancy trail and insist on exactly two records', verifyOccupancyCount)
   .step('IC30', 'Cross-check the submitted form against the recovered occupancy trail', crossCheckFormAndOccupancies)
   .build()
@@ -391,7 +432,9 @@ const sequence = createAsyncFlow<{ form: SubmittedForm }, string>()
 
 ### Static Graph
 
-<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>Static sequence view does not have a run result yet.</p></div><div><div>
+This is the same flow before execution.
+
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>No run result yet.</p></div><div><div>
 
 <!-- structured-process-demo:static-graph:mermaid:start -->
 ```mermaid
@@ -419,6 +462,8 @@ flowchart TD
 <!-- structured-process-demo:static-graph:html-table:end --></div></div>
 
 ### Passing Demo
+
+Happy path: every step runs and the flow ends with `ok`.
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
@@ -546,6 +591,8 @@ The submitted form and occupancy trail tell a consistent story."]
 
 ### Failing Demo
 
+A step returns `error`. Execution continues, but the overall result is failed.
+
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
@@ -667,6 +714,8 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
 <!-- structured-process-demo:failing-demo:html-table:end --></div></div>
 
 ### Stop Demo
+
+A step returns `stop`, so later steps are recorded as `skip`.
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
@@ -791,6 +840,8 @@ The first two records are enough here, so the sequence can finish early."]
 <!-- structured-process-demo:stop-demo:html-table:end --></div></div>
 
 ### Exception Demo
+
+An exception ends the flow immediately and marks the rest as `skip`.
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
@@ -920,38 +971,33 @@ A contradictory record was discovered, so the sequence stops immediately."]
 
 ### One Of Three Branches
 
-Select one branch from three.
+Selector returns one branch key.
 
 ```ts
 type PostingKind = 'income' | 'expense' | 'transfer'
 
-const incomeFlow = createSyncFlow<{ amount: number; kind: PostingKind }>().step(
-  'IN-1',
-  'Handle income',
-  ({ amount }) => ({
-    normalizedAmount: amount,
-  })
-)
-
-const expenseFlow = createSyncFlow<{ amount: number; kind: PostingKind }>().step(
-  'EX-1',
-  'Handle expense',
-  ({ amount }) => ({
-    normalizedAmount: -amount,
-  })
-)
-
-const transferFlow = createSyncFlow<{ amount: number; kind: PostingKind }>().step('TR-1', 'Handle transfer', () => ({
-  transferSeen: true,
+const incomeFlow = createSyncFlow('IN-1', 'Handle income', ({ amount }: { amount: number; kind: PostingKind }) => ({
+  normalizedAmount: amount,
 }))
 
-const oneOfThreeBranchFlow = createSyncFlow<{ amount: number; kind: PostingKind }>()
-  .branch('ROUTE', 'Route posting kind', ({ kind }) => kind, {
+const expenseFlow = createSyncFlow('EX-1', 'Handle expense', ({ amount }: { amount: number; kind: PostingKind }) => ({
+  normalizedAmount: -amount,
+}))
+
+const transferFlow = createSyncFlow('TR-1', 'Handle transfer', ({ kind }: { amount: number; kind: PostingKind }) => ({
+  transferSeen: kind === 'transfer',
+}))
+
+const oneOfThreeBranchFlow = createSyncFlow(
+  'ROUTE',
+  'Route posting kind',
+  ({ kind }: { amount: number; kind: PostingKind }) => kind,
+  {
     income: incomeFlow,
     expense: expenseFlow,
     transfer: transferFlow,
-  })
-  .build()
+  }
+).build()
 ```
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
@@ -1149,40 +1195,47 @@ end"]
 
 ### Two Of Three Branches
 
-Select two branches and record each result.
+Selector returns multiple branch keys.
 
 ```ts
 type CheckName = 'tax' | 'fraud' | 'policy'
 
-const taxFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }>().step('TAX-1', 'Check taxes', async () => ({
-  taxChecked: true,
-}))
+const taxFlow = createAsyncFlow(
+  'TAX-1',
+  'Check taxes',
+  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
+    taxChecked: checks.includes('tax'),
+  })
+)
 
-const fraudFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }, string>().step(
+const fraudFlow = createAsyncFlow(
   'FRAUD-1',
   'Check fraud',
-  async () =>
+  async ({ checks }: { amount: number; checks: CheckName[] }) =>
     stepResult({
-      result: 'error',
+      result: checks.includes('fraud') ? 'error' : 'skip',
       info: 'Fraud review failed.',
     })
 )
 
-const policyFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }>().step(
+const policyFlow = createAsyncFlow(
   'POLICY-1',
   'Check policy',
-  async () => ({
-    policyChecked: true,
+  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
+    policyChecked: checks.includes('policy'),
   })
 )
 
-const twoOfThreeBranchFlow = createAsyncFlow<{ amount: number; checks: CheckName[] }>()
-  .branch('CHECKS', 'Run selected checks', ({ checks }) => checks, {
+const twoOfThreeBranchFlow = createAsyncFlow(
+  'CHECKS',
+  'Run selected checks',
+  ({ checks }: { amount: number; checks: CheckName[] }) => checks,
+  {
     tax: taxFlow,
     fraud: fraudFlow,
     policy: policyFlow,
-  })
-  .build()
+  }
+).build()
 ```
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
@@ -1398,52 +1451,55 @@ Fraud review failed."]
 
 ### Nested Branch
 
-Select `B`, then `D` inside `B`.
+A branch can route into another branch flow.
 
 ```ts
 type FirstBranch = 'A' | 'B'
 type SecondBranch = 'C' | 'D'
 
-const branchAFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().step(
+const branchAFlow = createSyncFlow(
   'A-1',
   'Handle A',
-  () => ({
-    visitedA: true,
+  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
+    visitedA: firstBranch === 'A',
   })
 )
 
-const branchCFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().step(
+const branchCFlow = createSyncFlow(
   'C-1',
   'Handle C',
-  () => ({
-    visitedC: true,
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
+    visitedC: secondBranch === 'C',
   })
 )
 
-const branchDFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().step(
+const branchDFlow = createSyncFlow(
   'D-1',
   'Handle D',
-  () => ({
-    visitedD: true,
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
+    visitedD: secondBranch === 'D',
   })
 )
 
-const branchBFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>().branch(
+const branchBFlow = createSyncFlow(
   'B-ROUTE',
   'Route second branch',
-  ({ secondBranch }) => secondBranch,
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => secondBranch,
   {
     C: branchCFlow,
     D: branchDFlow,
   }
 )
 
-const nestedBranchFlow = createSyncFlow<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .branch('ROOT-ROUTE', 'Route first branch', ({ firstBranch }) => firstBranch, {
+const nestedBranchFlow = createSyncFlow(
+  'ROOT-ROUTE',
+  'Route first branch',
+  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => firstBranch,
+  {
     A: branchAFlow,
     B: branchBFlow,
-  })
-  .build()
+  }
+).build()
 ```
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
@@ -1684,28 +1740,31 @@ end"]
 
 ### Skipped Branch
 
-Return `skip` directly from the selector.
+Selector returns 'skip' status instead of branch keys.
 
 ```ts
-const approveFlow = createSyncFlow<{ shouldRunChecks: boolean }>().step('APP-1', 'Approve', () => ({
-  approved: true,
+const approveFlow = createSyncFlow('APP-1', 'Approve', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
+  approved: !shouldRunChecks,
 }))
 
-const rejectFlow = createSyncFlow<{ shouldRunChecks: boolean }>().step('REJ-1', 'Reject', () => ({
-  rejected: true,
+const rejectFlow = createSyncFlow('REJ-1', 'Reject', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
+  rejected: !shouldRunChecks,
 }))
 
-const reviewFlow = createSyncFlow<{ shouldRunChecks: boolean }>().step('REV-1', 'Review', () => ({
-  reviewed: true,
+const reviewFlow = createSyncFlow('REV-1', 'Review', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
+  reviewed: shouldRunChecks,
 }))
 
-const skippedBranchFlow = createSyncFlow<{ shouldRunChecks: boolean }>()
-  .branch('OPTIONAL-CHECKS', 'Optionally run checks', ({ shouldRunChecks }) => (shouldRunChecks ? 'review' : 'skip'), {
+const skippedBranchFlow = createSyncFlow(
+  'OPTIONAL-CHECKS',
+  'Optionally run checks',
+  ({ shouldRunChecks }: { shouldRunChecks: boolean }) => (shouldRunChecks ? 'review' : 'skip'),
+  {
     approve: approveFlow,
     reject: rejectFlow,
     review: reviewFlow,
-  })
-  .build()
+  }
+).build()
 ```
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
