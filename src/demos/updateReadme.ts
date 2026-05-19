@@ -1,10 +1,12 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { AsyncFlow, BranchRunResult, createAsync, createSync, Flow, FlowResult, stepResult } from '../structuredFlow'
-import { renderProcessAsMermaidGraph } from '../mermaid'
+import type { EnrichedBranchRunResult, EnrichedFlowResult, FlowResult, FlowStepDefinition } from '../structuredFlow.ts'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
+import { renderProcessAsMermaidGraph } from '../mermaidRenderer.ts'
 
 const demoSourceMarkerPrefix = 'structured-process-demo-example'
+const structuredStepDescriptionSourceMarkerPrefix = 'structured-step-description-example'
 const branchOneSourceMarkerPrefix = 'branch-one-of-three-example'
 const branchTwoSourceMarkerPrefix = 'branch-two-of-three-example'
 const nestedBranchSourceMarkerPrefix = 'nested-branch-example'
@@ -54,139 +56,194 @@ async function crossCheckFormAndOccupancies({ form }: { form: SubmittedForm; occ
   })
 }
 
-const sequence = createAsync<{ form: SubmittedForm }, string>()
-  .step('IC10', 'Get linked occupancy records', getOccupancies)
+const sequence = createAsyncFlow('IC10', 'Get linked occupancy records', getOccupancies)
   .step('IC25', 'Count the recovered occupancy trail and insist on exactly two records', verifyOccupancyCount)
   .step('IC30', 'Cross-check the submitted form against the recovered occupancy trail', crossCheckFormAndOccupancies)
   .build()
 /* structured-process-demo-example:end */
 
+/* structured-step-description-example:start */
+type StepMeta = {
+  label: string
+  area: 'billing' | 'risk'
+  severity: 'low' | 'high'
+}
+
+const autoReviewFlow = createSyncFlow(
+  'AUTO-1',
+  { label: 'Auto approve', area: 'risk', severity: 'low' },
+  ({ amount, normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
+    autoApproved: normalizedAmount <= Math.abs(amount),
+  })
+)
+
+const manualReviewFlow = createSyncFlow(
+  'MANUAL-1',
+  { label: 'Manual review', area: 'risk', severity: 'high' },
+  ({ normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
+    queuedForReview: normalizedAmount > 1000,
+  })
+)
+
+const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
+  'VALIDATE',
+  { label: 'Validate amount', area: 'billing', severity: 'high' },
+  ({ amount }) => ({
+    normalizedAmount: Math.abs(amount),
+  })
+)
+  .branch(
+    'ROUTE',
+    { label: 'Route review', area: 'risk', severity: 'low' },
+    ({ normalizedAmount }) => (normalizedAmount > 1000 ? 'manual' : 'auto'),
+    {
+      auto: autoReviewFlow,
+      manual: manualReviewFlow,
+    }
+  )
+  .build()
+/* structured-step-description-example:end */
+
 /* branch-one-of-three-example:start */
 type PostingKind = 'income' | 'expense' | 'transfer'
 
-const incomeFlow = createSync<{ amount: number; kind: PostingKind }>()
-  .step('IN-1', 'Handle income', ({ amount }) => ({
-    normalizedAmount: amount,
-  }))
-  .build()
+const incomeFlow = createSyncFlow('IN-1', 'Handle income', ({ amount }: { amount: number; kind: PostingKind }) => ({
+  normalizedAmount: amount,
+}))
 
-const expenseFlow = createSync<{ amount: number; kind: PostingKind }>()
-  .step('EX-1', 'Handle expense', ({ amount }) => ({
-    normalizedAmount: -amount,
-  }))
-  .build()
+const expenseFlow = createSyncFlow('EX-1', 'Handle expense', ({ amount }: { amount: number; kind: PostingKind }) => ({
+  normalizedAmount: -amount,
+}))
 
-const transferFlow = createSync<{ amount: number; kind: PostingKind }>()
-  .step('TR-1', 'Handle transfer', () => ({
-    transferSeen: true,
-  }))
-  .build()
+const transferFlow = createSyncFlow('TR-1', 'Handle transfer', ({ kind }: { amount: number; kind: PostingKind }) => ({
+  transferSeen: kind === 'transfer',
+}))
 
-const oneOfThreeBranchFlow = createSync<{ amount: number; kind: PostingKind }>()
-  .branch('ROUTE', ({ kind }) => kind, {
+const oneOfThreeBranchFlow = createSyncFlow(
+  'ROUTE',
+  'Route posting kind',
+  ({ kind }: { amount: number; kind: PostingKind }) => kind,
+  {
     income: incomeFlow,
     expense: expenseFlow,
     transfer: transferFlow,
-  })
-  .build()
+  }
+).build()
 /* branch-one-of-three-example:end */
 
 /* branch-two-of-three-example:start */
 type CheckName = 'tax' | 'fraud' | 'policy'
 
-const taxFlow = createAsync<{ amount: number; checks: CheckName[] }>()
-  .step('TAX-1', 'Check taxes', async () => ({
-    taxChecked: true,
-  }))
-  .build()
+const taxFlow = createAsyncFlow(
+  'TAX-1',
+  'Check taxes',
+  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
+    taxChecked: checks.includes('tax'),
+  })
+)
 
-const fraudFlow = createAsync<{ amount: number; checks: CheckName[] }, string>()
-  .step('FRAUD-1', 'Check fraud', async () =>
+const fraudFlow = createAsyncFlow(
+  'FRAUD-1',
+  'Check fraud',
+  async ({ checks }: { amount: number; checks: CheckName[] }) =>
     stepResult({
-      result: 'error',
+      result: checks.includes('fraud') ? 'error' : 'skip',
       info: 'Fraud review failed.',
     })
-  )
-  .build()
+)
 
-const policyFlow = createAsync<{ amount: number; checks: CheckName[] }>()
-  .step('POLICY-1', 'Check policy', async () => ({
-    policyChecked: true,
-  }))
-  .build()
+const policyFlow = createAsyncFlow(
+  'POLICY-1',
+  'Check policy',
+  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
+    policyChecked: checks.includes('policy'),
+  })
+)
 
-const twoOfThreeBranchFlow = createAsync<{ amount: number; checks: CheckName[] }>()
-  .branch('CHECKS', ({ checks }) => checks, {
+const twoOfThreeBranchFlow = createAsyncFlow(
+  'CHECKS',
+  'Run selected checks',
+  ({ checks }: { amount: number; checks: CheckName[] }) => checks,
+  {
     tax: taxFlow,
     fraud: fraudFlow,
     policy: policyFlow,
-  })
-  .build()
+  }
+).build()
 /* branch-two-of-three-example:end */
 
 /* nested-branch-example:start */
 type FirstBranch = 'A' | 'B'
 type SecondBranch = 'C' | 'D'
 
-const branchAFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .step('A-1', 'Handle A', () => ({
-    visitedA: true,
-  }))
-  .build()
+const branchAFlow = createSyncFlow(
+  'A-1',
+  'Handle A',
+  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
+    visitedA: firstBranch === 'A',
+  })
+)
 
-const branchCFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .step('C-1', 'Handle C', () => ({
-    visitedC: true,
-  }))
-  .build()
+const branchCFlow = createSyncFlow(
+  'C-1',
+  'Handle C',
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
+    visitedC: secondBranch === 'C',
+  })
+)
 
-const branchDFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .step('D-1', 'Handle D', () => ({
-    visitedD: true,
-  }))
-  .build()
+const branchDFlow = createSyncFlow(
+  'D-1',
+  'Handle D',
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
+    visitedD: secondBranch === 'D',
+  })
+)
 
-const branchBFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .branch('B-ROUTE', ({ secondBranch }) => secondBranch, {
+const branchBFlow = createSyncFlow(
+  'B-ROUTE',
+  'Route second branch',
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => secondBranch,
+  {
     C: branchCFlow,
     D: branchDFlow,
-  })
-  .build()
+  }
+)
 
-const nestedBranchFlow = createSync<{ firstBranch: FirstBranch; secondBranch: SecondBranch }>()
-  .branch('ROOT-ROUTE', ({ firstBranch }) => firstBranch, {
+const nestedBranchFlow = createSyncFlow(
+  'ROOT-ROUTE',
+  'Route first branch',
+  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => firstBranch,
+  {
     A: branchAFlow,
     B: branchBFlow,
-  })
-  .build()
+  }
+).build()
 /* nested-branch-example:end */
 
 /* branch-skip-example:start */
-const approveFlow = createSync<{ shouldRunChecks: boolean }>()
-  .step('APP-1', 'Approve', () => ({
-    approved: true,
-  }))
-  .build()
+const approveFlow = createSyncFlow('APP-1', 'Approve', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
+  approved: !shouldRunChecks,
+}))
 
-const rejectFlow = createSync<{ shouldRunChecks: boolean }>()
-  .step('REJ-1', 'Reject', () => ({
-    rejected: true,
-  }))
-  .build()
+const rejectFlow = createSyncFlow('REJ-1', 'Reject', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
+  rejected: !shouldRunChecks,
+}))
 
-const reviewFlow = createSync<{ shouldRunChecks: boolean }>()
-  .step('REV-1', 'Review', () => ({
-    reviewed: true,
-  }))
-  .build()
+const reviewFlow = createSyncFlow('REV-1', 'Review', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
+  reviewed: shouldRunChecks,
+}))
 
-const skippedBranchFlow = createSync<{ shouldRunChecks: boolean }>()
-  .branch('OPTIONAL-CHECKS', ({ shouldRunChecks }) => (shouldRunChecks ? 'review' : 'skip'), {
+const skippedBranchFlow = createSyncFlow(
+  'OPTIONAL-CHECKS',
+  'Optionally run checks',
+  ({ shouldRunChecks }: { shouldRunChecks: boolean }) => (shouldRunChecks ? 'review' : 'skip'),
+  {
     approve: approveFlow,
     reject: rejectFlow,
     review: reviewFlow,
-  })
-  .build()
+  }
+).build()
 /* branch-skip-example:end */
 
 function escapeMarkdownCodeBlock(value: string): string {
@@ -200,8 +257,72 @@ function escapeHtml(value: string): string {
 type GeneratedBlockKind = 'json' | 'mermaid' | 'html-table'
 type MaybePromise<T> = T | Promise<T>
 type FlowLike<InitialCtx extends object> = {
-  steps: readonly { id: string; description: string }[]
+  steps: readonly { id: string; description: unknown }[]
   run(initial: InitialCtx): MaybePromise<FlowResult<any, any>>
+}
+
+function formatDescription(description: unknown): string {
+  if (typeof description === 'string') {
+    return description
+  }
+
+  const json = JSON.stringify(description)
+  return json ?? String(description)
+}
+
+function truncate(value: string, maxLength = 160): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`
+}
+
+function describeFunction(fn: { toString(): string }) {
+  const source = fn.toString().trim()
+  const normalized = source.replace(/\s+/g, ' ')
+  const isAsync = normalized.startsWith('async ')
+
+  if (normalized.includes('=>')) {
+    const [rawParams, rawBody = ''] = normalized.split(/=>\s*/, 2)
+
+    return {
+      kind: 'arrow-function',
+      async: isAsync,
+      params: rawParams.replace(/^async\s*/, '').trim(),
+      bodyPreview: truncate(rawBody.trim()),
+    }
+  }
+
+  const functionMatch = normalized.match(/^(async\s+)?function(?:\s+([^(]+))?\s*\(([^)]*)\)\s*\{([\s\S]*)\}$/)
+
+  if (functionMatch != null) {
+    return {
+      kind: 'function',
+      async: isAsync,
+      name: functionMatch[2]?.trim() || 'anonymous',
+      params: functionMatch[3].trim(),
+      bodyPreview: truncate(functionMatch[4].trim()),
+    }
+  }
+
+  return {
+    kind: 'function',
+    async: isAsync,
+    sourcePreview: truncate(normalized),
+  }
+}
+
+function serializeForJson(value: unknown): unknown {
+  if (typeof value === 'function') {
+    return describeFunction(value)
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => serializeForJson(item))
+  }
+
+  if (value != null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, serializeForJson(entry)]))
+  }
+
+  return value
 }
 
 function wrapGeneratedBlock(markerId: string, kind: GeneratedBlockKind, content: string): string {
@@ -247,16 +368,13 @@ function renderThreeColumnHtml(firstHtml: string, secondHtml: string, thirdHtml:
   ].join('')
 }
 
-function renderFlowTable(
-  markerId: string,
-  sequence: Pick<Flow<any, any, any>, 'steps'> | Pick<AsyncFlow<any, any, any>, 'steps'>
-): string {
+function renderFlowTable(markerId: string, sequence: { steps: readonly FlowStepDefinition<unknown>[] }): string {
   return wrapGeneratedBlock(
     markerId,
     'html-table',
     renderHtmlTable(
       ['Step', 'Description'],
-      sequence.steps.map((step: { id: string; description: string }) => [step.id, step.description])
+      sequence.steps.map((step: { id: string; description: unknown }) => [step.id, formatDescription(step.description)])
     )
   )
 }
@@ -299,7 +417,7 @@ function renderOutcomeBadge(result: Pick<FlowResult<any, any>, 'ok' | 'stepResul
   return renderStatusBadge(badgeType).replace(`>${escapeHtml(badgeType)}<`, `>${escapeHtml(label)}<`)
 }
 
-function renderBranchStepDetails(stepResults: BranchRunResult['stepResults'], depth: number): string {
+function renderBranchStepDetails(stepResults: EnrichedBranchRunResult['stepResults'], depth: number): string {
   if (stepResults.length === 0) {
     return '<div style="margin-top:4px;color:#64748b;">No branch steps recorded.</div>'
   }
@@ -307,31 +425,27 @@ function renderBranchStepDetails(stepResults: BranchRunResult['stepResults'], de
   return stepResults
     .map(
       (stepResult) => `<div style="margin-top:4px;padding-left:${depth * 12}px;">
-<div>${escapeHtml(stepResult.id)} ${renderStatusBadge(stepResult.result)}</div>
+<div>${escapeHtml(`${stepResult.id}: ${formatDescription(stepResult.description)}`)} ${renderStatusBadge(stepResult.result)}</div>
 ${stepResult.info == null ? '' : `<div style="margin-top:2px;color:#475569;">${escapeHtml(String(stepResult.info))}</div>`}
+${stepResult.addToCtx == null ? '' : `<div style="margin-top:2px;color:#475569;">Add to ctx: ${escapeHtml(JSON.stringify(stepResult.addToCtx))}</div>`}
 ${renderBranchDetails(stepResult.branches, depth + 1)}
 </div>`
     )
     .join('')
 }
 
-function renderBranchDetails(branches?: BranchRunResult[], depth = 0): string {
+function renderBranchDetails(branches?: EnrichedBranchRunResult[], depth = 0): string {
   if (branches == null || branches.length === 0) {
     return ''
   }
 
   return branches
     .map((branch) => {
-      const descriptionById = new Map(branch.steps.map((step) => [step.id, step.description]))
-      const stepResultsWithDescriptions = branch.stepResults.map((stepResult) => ({
-        ...stepResult,
-        id: descriptionById.get(stepResult.id) == null ? stepResult.id : `${stepResult.id}: ${descriptionById.get(stepResult.id) ?? ''}`,
-      }))
-      const stepHtml = renderBranchStepDetails(stepResultsWithDescriptions, depth + 1)
+      const stepHtml = renderBranchStepDetails(branch.stepResults, depth + 1)
 
       return `<div style="margin-bottom:10px;padding-left:${depth * 12}px;">
 <div><strong>${escapeHtml(branch.key)}</strong> ${renderStatusBadge(branch.result)}</div>
-<div style="margin-top:2px;color:#475569;">Ctx: ${escapeHtml(JSON.stringify(branch.ctx))}</div>
+<div style="margin-top:2px;color:#475569;">Final ctx: ${escapeHtml(JSON.stringify(branch.finalCtx))}</div>
 ${stepHtml}
 </div>`
     })
@@ -340,25 +454,24 @@ ${stepHtml}
 
 function renderResultTable(
   markerId: string,
-  steps: readonly { id: string; description: string }[],
-  result: Pick<FlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults'>
+  result: Pick<EnrichedFlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults'>
 ): string {
   const failedStepIds = result.failedStepIds()
-  const descriptionById = new Map(steps.map((step) => [step.id, step.description]))
   const rowsHtml = result.stepResults
-    .map((stepResult) => {
-      const description = descriptionById.get(stepResult.id) ?? ''
-
-      return `<tr>
+    .map(
+      (stepResult) => `<tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(stepResult.id)}</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(description)}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(formatDescription(stepResult.description))}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderStatusBadge(stepResult.result)}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(
         stepResult.info == null ? '' : String(stepResult.info)
       )}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(
+        stepResult.addToCtx == null ? '' : JSON.stringify(stepResult.addToCtx)
+      )}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderBranchDetails(stepResult.branches)}</td>
 </tr>`
-    })
+    )
     .join('')
 
   return [
@@ -370,7 +483,7 @@ function renderResultTable(
       'html-table',
       [
         '<table style="width:100%;border-collapse:collapse;font-size:14px;">',
-        '<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>',
+        '<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>',
         `<tbody>${rowsHtml}</tbody>`,
         '</table>',
       ].join('\n')
@@ -390,6 +503,10 @@ function renderJsonCodeBlock(markerId: string, value: unknown): string {
   )
 }
 
+function renderFlowConfigurationJson(markerId: string, flow: unknown): string {
+  return renderJsonCodeBlock(markerId, serializeForJson(flow))
+}
+
 function renderMermaidBlock(markerId: string, graph: string): string {
   return wrapGeneratedBlock(markerId, 'mermaid', ['```mermaid', graph, '```'].join('\n'))
 }
@@ -397,25 +514,26 @@ function renderMermaidBlock(markerId: string, graph: string): string {
 function renderDemoResultSection<Steps extends readonly any[]>(
   markerId: string,
   sequenceInit: unknown,
-  result: Pick<FlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults' | 'ctx'> & { steps: Steps }
+  result: Pick<FlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults' | 'finalCtx'> & { steps: Steps },
+  enrichedResult: Pick<EnrichedFlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults'>
 ): string {
   return renderThreeColumnHtml(
     renderMarkdownPane(
       [
-        '<p><strong>Init JSON</strong></p>',
+        '<p><strong>Initial JSON parameter</strong></p>',
         renderJsonCodeBlock(`${markerId}-init`, sequenceInit),
         '',
-        '<p><strong>Result JSON</strong></p>',
+        '<p><strong>Resulting JSON</strong></p>',
         renderJsonCodeBlock(`${markerId}-result`, {
           ok: result.ok,
           failedStepIds: result.failedStepIds(),
           stepResults: result.stepResults,
-          ctx: result.ctx,
+          finalCtx: result.finalCtx,
         }),
       ].join('\n')
     ),
     renderMarkdownPane(renderMermaidBlock(markerId, renderProcessAsMermaidGraph(result))),
-    renderResultTable(markerId, result.steps as readonly { id: string; description: string }[], result)
+    renderResultTable(markerId, enrichedResult)
   )
 }
 
@@ -453,23 +571,41 @@ type GeneratedExample<InitialCtx extends object> = {
   codePlaceholder: string
   codeMarkerPrefix: string
   flow: FlowLike<InitialCtx>
+  flowJsonPlaceholder?: string
   demoPlaceholder: string
   demoInit: InitialCtx
 }
 
 async function renderGeneratedExample<InitialCtx extends object>(
   markdown: string,
-  { codePlaceholder, codeMarkerPrefix, flow, demoPlaceholder, demoInit }: GeneratedExample<InitialCtx>
+  {
+    codePlaceholder,
+    codeMarkerPrefix,
+    flow,
+    flowJsonPlaceholder,
+    demoPlaceholder,
+    demoInit,
+  }: GeneratedExample<InitialCtx>
 ): Promise<string> {
   const exampleCode = readCodeBlockFromSource(codeMarkerPrefix)
   const result = await flow.run(demoInit)
+  const enrichedResult = result.enrichResult()
+  const markdownWithCode = markdown.replace(
+    `{{${codePlaceholder}}}`,
+    ['```ts', escapeMarkdownCodeBlock(exampleCode), '```'].join('\n')
+  )
+  const markdownWithFlowJson =
+    flowJsonPlaceholder == null
+      ? markdownWithCode
+      : markdownWithCode.replace(
+          `{{${flowJsonPlaceholder}}}`,
+          renderFlowConfigurationJson(replaceKeyToMarkerId(flowJsonPlaceholder), flow)
+        )
 
-  return markdown
-    .replace(`{{${codePlaceholder}}}`, ['```ts', escapeMarkdownCodeBlock(exampleCode), '```'].join('\n'))
-    .replace(
-      `{{${demoPlaceholder}}}`,
-      renderDemoResultSection(replaceKeyToMarkerId(demoPlaceholder), demoInit, result)
-    )
+  return markdownWithFlowJson.replace(
+    `{{${demoPlaceholder}}}`,
+    renderDemoResultSection(replaceKeyToMarkerId(demoPlaceholder), demoInit, result, enrichedResult)
+  )
 }
 
 async function renderStructuredProcessExampleMarkdown<InitialCtx extends object>(
@@ -485,7 +621,7 @@ async function renderStructuredProcessExampleMarkdown<InitialCtx extends object>
     .replace(
       '{{STATIC_GRAPH_SECTION}}',
       renderThreeColumnHtml(
-        '<p><strong>Result JSON</strong><br>Static sequence view does not have a run result yet.</p>',
+        '<p><strong>Result JSON</strong><br>No run result yet.</p>',
         renderMarkdownPane(renderMermaidBlock('static-graph', renderProcessAsMermaidGraph(sequence))),
         renderFlowTable('static-graph', sequence)
       )
@@ -493,11 +629,21 @@ async function renderStructuredProcessExampleMarkdown<InitialCtx extends object>
 
   for (const [replaceKey, sequenceInit] of Object.entries(demoFlowInits)) {
     const result = await sequence.run(sequenceInit)
+    const enrichedResult = result.enrichResult()
     markdown = markdown.replace(
       `{{${replaceKey}}}`,
-      renderDemoResultSection(replaceKeyToMarkerId(replaceKey), sequenceInit, result)
+      renderDemoResultSection(replaceKeyToMarkerId(replaceKey), sequenceInit, result, enrichedResult)
     )
   }
+
+  markdown = await renderGeneratedExample(markdown, {
+    codePlaceholder: 'STRUCTURED_STEP_DESCRIPTION_CODE_BLOCK',
+    codeMarkerPrefix: structuredStepDescriptionSourceMarkerPrefix,
+    flow: structuredStepDescriptionFlow,
+    flowJsonPlaceholder: 'STRUCTURED_STEP_DESCRIPTION_FLOW_JSON',
+    demoPlaceholder: 'STRUCTURED_STEP_DESCRIPTION_DEMO_SECTION',
+    demoInit: { amount: -1400 },
+  })
 
   markdown = await renderGeneratedExample(markdown, {
     codePlaceholder: 'BRANCH_ONE_OF_THREE_CODE_BLOCK',

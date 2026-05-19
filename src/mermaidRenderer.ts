@@ -1,30 +1,8 @@
-import {
-  AsyncFlow,
-  AsyncFlowBuilder,
-  BranchRunResult,
-  Flow,
-  FlowBuilder,
-  FlowResult,
-  StepStatus,
-} from './structuredFlow'
-
-type MermaidStep = {
-  id: string
-  description: string
-}
-
-type MermaidStepResult = {
-  id: string
-  result: StepStatus
-  info?: unknown
-  branches?: BranchRunResult[]
-}
+import type { FlowLike, FlowStepDefinition, FlowStepResult, StepStatus } from './structuredFlow.ts'
+import { FlowResult } from './structuredFlow.ts'
 
 type MermaidRenderable =
-  | Pick<FlowBuilder<any, any, any, any>, 'steps'>
-  | Pick<AsyncFlowBuilder<any, any, any, any>, 'steps'>
-  | Pick<Flow<any, any, any>, 'steps'>
-  | Pick<AsyncFlow<any, any, any>, 'steps'>
+  | Pick<FlowLike<any, any, any>, 'steps'>
   | Pick<FlowResult<any, any>, 'steps' | 'ok' | 'stepResults'>
 
 function hasStepResults(value: MermaidRenderable): value is Pick<FlowResult<any, any>, 'steps' | 'ok' | 'stepResults'> {
@@ -35,47 +13,73 @@ function escapeMermaidLabel(value: string): string {
   return value.replaceAll('"', '\\"')
 }
 
+function formatMermaidValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean' || value == null) {
+    return String(value)
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => formatMermaidValue(entry)).join(', ')
+  }
+
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .map(([key, entry]) => `${key}=${formatMermaidValue(entry)}`)
+      .join(', ')
+  }
+
+  return String(value)
+}
+
 function statusToClassName(result: StepStatus): string {
   return result === 'ok' ? 'success' : result === 'skip' ? 'neutral' : result === 'stop' ? 'complete' : 'failure'
 }
 
-function renderStepLabel(step: MermaidStep, stepResult?: MermaidStepResult): string {
-  const branchKeys = stepResult?.branches?.filter((branch) => branch.result !== 'skip').map((branch) => String(branch.key))
-  const isBranchStep = step.description === 'Branch'
+function renderStepLabel(step: FlowStepDefinition<unknown>, stepResult?: FlowStepResult): string {
+  const branchKeys = stepResult?.branches
+    ?.filter((branch) => branch.result !== 'skip')
+    .map((branch) => String(branch.key))
+  const description = formatMermaidValue(step.description)
 
-  if (branchKeys != null && branchKeys.length > 0) {
-    return `${step.id}:\nbranches: ${branchKeys.join(', ')}`
+  if (stepResult != null && branchKeys != null && branchKeys.length > 0) {
+    return `${step.id}: ${description}\nbranches: ${branchKeys.join(', ')}\n[${stepResult.result}]${
+      stepResult.info == null ? '' : `\n${String(stepResult.info)}`
+    }`
   }
 
-  if (isBranchStep && stepResult != null) {
-    return `${step.id}: branch()\n[${stepResult.result}]${stepResult.info == null ? '' : `\n${String(stepResult.info)}`}`
-  }
-
-  if (isBranchStep) {
-    return `${step.id}: branch()`
+  if (stepResult?.branches != null) {
+    return `${step.id}: ${description}\n[${stepResult.result}]${stepResult.info == null ? '' : `\n${String(stepResult.info)}`}`
   }
 
   if (stepResult == null) {
-    return `${step.id}: ${step.description}`
+    return `${step.id}: ${description}`
   }
 
-  return `${step.id}: ${step.description}\n[${stepResult.result}]${stepResult.info == null ? '' : `\n${String(stepResult.info)}`}`
+  return `${step.id}: ${description}\n[${stepResult.result}]${stepResult.info == null ? '' : `\n${String(stepResult.info)}`}`
 }
 
 function renderBranchGraphLines(
   parentNodeId: string,
-  nextNodeId: string,
-  stepResult: MermaidStepResult,
+  nextNodeId: string | undefined,
+  stepResult: FlowStepResult,
   branchPrefix: string
 ): string[] {
   if (stepResult.branches == null || stepResult.branches.length === 0) {
-    return [`  ${parentNodeId} --> ${nextNodeId}`]
+    return nextNodeId == null ? [] : [`  ${parentNodeId} --> ${nextNodeId}`]
   }
 
   const lines: string[] = []
-  const branchResultNodeId = `${branchPrefix}_result`
-  lines.push(`  ${branchResultNodeId}["${escapeMermaidLabel(`${stepResult.id}:\nResult: ${stepResult.result}`)}"]`)
-  lines.push(`  class ${branchResultNodeId} ${statusToClassName(stepResult.result)}`)
+  const branchEndNodeId = nextNodeId == null ? undefined : `${branchPrefix}_end`
+
+  if (branchEndNodeId != null) {
+    lines.push(`  ${branchEndNodeId}["${escapeMermaidLabel(`${stepResult.id}:\nend`)}"]`)
+    lines.push(`  ${branchEndNodeId} --> ${nextNodeId}`)
+    lines.push(`  class ${branchEndNodeId} join`)
+  }
 
   for (const [branchIndex, branch] of stepResult.branches.entries()) {
     const branchNodePrefix = `${branchPrefix}_${branchIndex}`
@@ -87,16 +91,17 @@ function renderBranchGraphLines(
     lines.push(`  ${branchStartNodeId}["${escapeMermaidLabel(branchStartLabel)}"]`)
     lines.push(`  ${parentNodeId} --> ${branchStartNodeId}`)
 
-    if (branch.steps.length === 0) {
-      lines.push(`  ${branchStartNodeId} --> ${branchResultNodeId}`)
-    } else {
+    if (branch.steps.length > 0) {
       for (const [childStepIndex, childStep] of branch.steps.entries()) {
         const childNodeId = `${branchNodePrefix}_step_${childStepIndex}`
         const childStepResult = branchResultById.get(childStep.id)
         const childLabel = renderStepLabel(childStep, childStepResult)
-        const previousNodeId = childStepIndex === 0 ? branchStartNodeId : `${branchNodePrefix}_step_${childStepIndex - 1}`
+        const previousNodeId =
+          childStepIndex === 0 ? branchStartNodeId : `${branchNodePrefix}_step_${childStepIndex - 1}`
         const targetNodeId =
-          childStepIndex === branch.steps.length - 1 ? branchResultNodeId : `${branchNodePrefix}_step_${childStepIndex + 1}`
+          childStepIndex === branch.steps.length - 1
+            ? branchEndNodeId
+            : `${branchNodePrefix}_step_${childStepIndex + 1}`
 
         lines.push(`  ${childNodeId}["${escapeMermaidLabel(childLabel)}"]`)
         lines.push(`  ${previousNodeId} --> ${childNodeId}`)
@@ -108,27 +113,27 @@ function renderBranchGraphLines(
           lines.push(`  ${childNodeId} --> ${targetNodeId}`)
         }
       }
+    } else if (branchEndNodeId != null) {
+      lines.push(`  ${branchStartNodeId} --> ${branchEndNodeId}`)
     }
 
     lines.push(`  class ${branchStartNodeId} ${branch.result === 'skip' ? 'neutral' : 'executed'}`)
   }
 
-  lines.push(`  ${branchResultNodeId} --> ${nextNodeId}`)
-
   return lines
 }
 
 export function renderProcessAsMermaidGraph(value: MermaidRenderable): string {
-  const steps = value.steps as readonly MermaidStep[]
+  const steps = value.steps as readonly FlowStepDefinition<unknown>[]
   const sequenceResult = hasStepResults(value) ? value : undefined
   const lines = ['flowchart TD', '  start([Start])']
   const resultById = new Map(
-    sequenceResult?.stepResults.map((stepResult) => [stepResult.id, stepResult as MermaidStepResult])
+    sequenceResult?.stepResults.map((stepResult) => [stepResult.id, stepResult as FlowStepResult])
   )
-  let finalResult: MermaidStepResult | undefined
+  let finalResult: FlowStepResult | undefined
   if (sequenceResult != null) {
     for (let index = sequenceResult.stepResults.length - 1; index >= 0; index--) {
-      const stepResult = sequenceResult.stepResults[index] as MermaidStepResult
+      const stepResult = sequenceResult.stepResults[index] as FlowStepResult
       if (stepResult.result !== 'skip') {
         finalResult = stepResult
         break
@@ -179,6 +184,7 @@ export function renderProcessAsMermaidGraph(value: MermaidRenderable): string {
   lines.push('  classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px')
   lines.push('  classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px')
   lines.push('  classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2')
+  lines.push('  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569')
 
   if (sequenceResult != null) {
     for (const [index, step] of steps.entries()) {
