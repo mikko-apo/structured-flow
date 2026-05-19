@@ -1,8 +1,88 @@
 import { describe, expect, it } from 'vitest'
 
-import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
 
 describe('FlowBuilder.branch', () => {
+  it('supports structured child flow descriptions without explicit generics on the child flows', () => {
+    type StepMeta = {
+      label: string
+      area: 'billing' | 'risk'
+      severity: 'low' | 'high'
+    }
+
+    const autoFlow = createSyncFlow(
+      'AUTO-1',
+      { label: 'Auto approve', area: 'risk', severity: 'low' },
+      ({ normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
+        autoApproved: normalizedAmount <= 1000,
+      })
+    )
+
+    const manualFlow = createSyncFlow(
+      'MANUAL-1',
+      { label: 'Manual review', area: 'risk', severity: 'high' },
+      ({ normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
+        queuedForReview: normalizedAmount > 1000,
+      })
+    )
+
+    const flow = createSyncFlow<StepMeta>(
+      'VALIDATE',
+      { label: 'Validate amount', area: 'billing', severity: 'high' },
+      ({ amount }: { amount: number }) => ({
+        normalizedAmount: Math.abs(amount),
+      })
+    )
+      .branch(
+        'ROUTE',
+        { label: 'Route review', area: 'risk', severity: 'low' },
+        ({ normalizedAmount }) => (normalizedAmount > 1000 ? 'manual' : 'auto'),
+        {
+          auto: autoFlow,
+          manual: manualFlow,
+        }
+      )
+      .build()
+
+    const result = flow.run({ amount: -1400 })
+
+    expect(result.ok).toBe(true)
+    expect(result.stepResults).toEqual([
+      {
+        id: 'VALIDATE',
+        result: 'ok',
+        addToCtx: { normalizedAmount: 1400 },
+      },
+      {
+        id: 'ROUTE',
+        result: 'ok',
+        branches: [
+          {
+            key: 'manual',
+            result: 'ok',
+            finalCtx: {
+              amount: -1400,
+              normalizedAmount: 1400,
+              queuedForReview: true,
+            },
+            steps: [{ id: 'MANUAL-1', description: { label: 'Manual review', area: 'risk', severity: 'high' } }],
+            stepResults: [{ id: 'MANUAL-1', result: 'ok', addToCtx: { queuedForReview: true } }],
+          },
+          {
+            key: 'auto',
+            result: 'skip',
+            finalCtx: {
+              amount: -1400,
+              normalizedAmount: 1400,
+            },
+            steps: [{ id: 'AUTO-1', description: { label: 'Auto approve', area: 'risk', severity: 'low' } }],
+            stepResults: [{ id: 'AUTO-1', result: 'skip' }],
+          },
+        ],
+      },
+    ])
+  })
+
   it('supports createSyncFlow<StepDescription, Info>(id, description, select, branches) as the first branch', () => {
     type StepMeta = { label: string }
     type InfoMeta = { reason: string }

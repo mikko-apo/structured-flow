@@ -1,14 +1,52 @@
 {
   "name": "structured-flow",
   "version": "0.0.1",
-  "private": true,
+  "description": "Model business rules or validation steps with code in a structured way.",
+  "keywords": [
+    "flow",
+    "workflow",
+    "validation",
+    "typescript",
+    "mermaid",
+    "business-rules"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mikko-apo/structured-flow.git"
+  },
+  "homepage": "https://github.com/mikko-apo/structured-flow#readme",
+  "bugs": {
+    "url": "https://github.com/mikko-apo/structured-flow/issues"
+  },
   "type": "module",
+  "main": "./dist/structuredFlow.js",
+  "types": "./dist/structuredFlow.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/structuredFlow.d.ts",
+      "import": "./dist/structuredFlow.js"
+    },
+    "./mermaidRenderer": {
+      "types": "./dist/mermaidRenderer.d.ts",
+      "import": "./dist/mermaidRenderer.js"
+    }
+  },
+  "files": [
+    "dist/structuredFlow.js",
+    "dist/structuredFlow.d.ts",
+    "dist/mermaidRenderer.js",
+    "dist/mermaidRenderer.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "bundle": "node --eval \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\" && tsc -p .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build:lib": "node --eval \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\" && tsc -p tsconfig.build.json",
     "update-readme": "node --experimental-strip-types --experimental-transform-types src/demos/updateReadme.ts",
-    "build": "npm run lint && npm run typecheck && npm run update-readme && npm run bundle && npm run format",
-    "dev": "tsc -w -p .",
+    "build": "npm run lint && npm run typecheck && npm run update-readme && npm run build:lib && npm run format",
+    "prepublishOnly": "npm run build",
+    "dev": "tsc -w -p tsconfig.build.json",
     "format": "prettier --write .",
     "lint": "eslint",
     "test": "vitest",

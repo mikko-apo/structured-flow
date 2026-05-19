@@ -8,11 +8,8 @@
     "rootDir": "src",
     "rewriteRelativeImportExtensions": true,
     "strict": true,
-    "declaration": true,
-    "outDir": "dist",
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"],
-  "exclude": ["src/tests"]
+  "include": ["src"]
 }

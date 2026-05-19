@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
 
 describe('structuredFlow core execution', () => {
   it('accumulates ctx from successful sync steps', () => {
@@ -153,8 +153,9 @@ describe('structuredFlow core execution', () => {
   })
 
   it('rejects promises returned from sync flows', () => {
-    const flow = createSyncFlow('S1', 'Invalid async in sync flow', (({ amount }: { amount: number }) =>
-      Promise.resolve({ later: amount > 0 })) as never)
+    const flow = createSyncFlow<{ amount: number }>()
+      .step('S1', 'Invalid async in sync flow', (({ amount }: { amount: number }) =>
+        Promise.resolve({ later: amount > 0 })) as never)
       .step('S2', 'Skipped', () => ({
         unreachable: true,
       }))
@@ -195,8 +196,57 @@ describe('structuredFlow core execution', () => {
     ])
   })
 
+  it('supports createSyncFlow(id, description, fn) without explicit type signatures', () => {
+    const flow = createSyncFlow('S1', 'Normalize amount', ({ amount }: { amount: number }) => ({
+      normalizedAmount: Math.abs(amount),
+    }))
+      .step('S2', 'Classify amount', ({ normalizedAmount }) => ({
+        isLarge: normalizedAmount >= 100,
+      }))
+      .build()
+
+    const result = flow.run({ amount: -120 })
+
+    expect(result.ok).toBe(true)
+    expect(flow.steps).toMatchObject([
+      { id: 'S1', description: 'Normalize amount' },
+      { id: 'S2', description: 'Classify amount' },
+    ])
+    expect(result.finalCtx).toEqual({
+      amount: -120,
+      normalizedAmount: 120,
+      isLarge: true,
+    })
+  })
+
+  it('supports createAsyncFlow(id, description, fn) without explicit type signatures', async () => {
+    const flow = createAsyncFlow('A1', 'Load score', async ({ amount }: { amount: number }) => ({
+      score: amount * 2,
+    }))
+      .step('A2', 'Approve score', async ({ score }) =>
+        stepResult({
+          info: 'Approved asynchronously.',
+          approved: score > 10,
+        })
+      )
+      .build()
+
+    const result = await flow.run({ amount: 7 })
+
+    expect(result.ok).toBe(true)
+    expect(flow.steps).toMatchObject([
+      { id: 'A1', description: 'Load score' },
+      { id: 'A2', description: 'Approve score' },
+    ])
+    expect(result.finalCtx).toEqual({
+      amount: 7,
+      score: 14,
+      approved: true,
+    })
+  })
+
   it('supports createSyncFlow/createAsyncFlow with custom step definitions and InitialCtx in the new generic order', async () => {
-    const syncFlow = createSyncFlow<{ label: string }, { amount: number }>()
+    const syncFlow = createSyncFlow<{ label: string }, { amount: number }, unknown>()
       .step('S1', { label: 'Add tax' }, ({ amount }) => ({
         taxedAmount: amount * 1.24,
       }))

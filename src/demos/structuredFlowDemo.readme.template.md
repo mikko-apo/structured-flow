@@ -3,8 +3,7 @@
 Model business rules or validation steps with code in a structured way.
 
 <!-- TOC -->
-* [structured-flow](#structured-flow)
-* [Core API surface](#core-api-surface)
+* [Core API](#core-api)
   * [Flow And Step Execution](#flow-and-step-execution)
   * [Handling results](#handling-results)
   * [Rendering results](#rendering-results)
