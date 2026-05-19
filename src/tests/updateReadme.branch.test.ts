@@ -69,6 +69,7 @@ describe('updateReadme branch rendering', () => {
       '<!-- structured-process-demo:structured-step-description-flow-json:json:start -->',
       '<!-- structured-process-demo:structured-step-description-flow-json:json:end -->'
     )
+    const coreApiSection = sliceBetween(markdown, '# Core API', '## Flow And Step Execution')
 
     expect(branchMermaid).toContain('ROUTE:')
     expect(branchMermaid).toContain('branches: expense')
@@ -116,5 +117,14 @@ describe('updateReadme branch rendering', () => {
     expect(structuredStepDescriptionFlowJson).toContain('&quot;fn&quot;: {')
     expect(structuredStepDescriptionFlowJson).toContain('&quot;kind&quot;: &quot;arrow-function&quot;')
     expect(structuredStepDescriptionFlowJson).toContain('&quot;bodyPreview&quot;:')
+    expect(markdown).toContain('const autoReviewFlow = createSyncFlow(')
+    expect(markdown).toContain('const manualReviewFlow = createSyncFlow(')
+    expect(markdown).not.toContain('const autoReviewFlow = createSyncFlow<')
+    expect(markdown).not.toContain('const manualReviewFlow = createSyncFlow<')
+    expect(coreApiSection).toContain(
+      "const validations = createAsyncFlow('IC10', 'Get linked occupancy records', getOccupancies)"
+    )
+    expect(coreApiSection).toContain("const result = await validations.run({form: {id: '200'}})")
+    expect(coreApiSection).toContain('if (!result.ok) {')
   })
 })

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
-import { renderProcessAsMermaidGraph } from '../mermaidRenderer.ts'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
+import { renderProcessAsMermaidGraph } from '../mermaidRenderer'
 
 describe('renderProcessAsMermaidGraph branch rendering', () => {
   it('renders empty flows and empty results as start-to-done graphs', () => {
@@ -182,11 +182,19 @@ describe('renderProcessAsMermaidGraph branch rendering', () => {
       severity: 'low' | 'high'
     }
 
-    const manualFlow = createSyncFlow<StepMeta>(
+    const manualFlow = createSyncFlow(
       'MANUAL-1',
       { label: 'Manual review', area: 'risk', severity: 'high' },
       ({ normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
         queued: normalizedAmount > 1000,
+      })
+    ).build()
+
+    const autoFlow = createSyncFlow(
+      'AUTO-1',
+      { label: 'Auto review', area: 'risk', severity: 'low' },
+      ({ normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
+        autoApproved: normalizedAmount <= 1000,
       })
     ).build()
 
@@ -200,8 +208,9 @@ describe('renderProcessAsMermaidGraph branch rendering', () => {
       .branch(
         'ROUTE',
         { label: 'Route review', area: 'risk', severity: 'low' },
-        ({ normalizedAmount }) => (normalizedAmount > 1000 ? 'manual' : 'skip'),
+        ({ normalizedAmount }) => (normalizedAmount > 1000 ? 'manual' : 'auto'),
         {
+          auto: autoFlow,
           manual: manualFlow,
         }
       )
@@ -212,6 +221,7 @@ describe('renderProcessAsMermaidGraph branch rendering', () => {
     expect(graph).toContain('VALIDATE: label=Validate amount, area=billing, severity=high')
     expect(graph).toContain('ROUTE: label=Route review, area=risk, severity=low')
     expect(graph).toContain('MANUAL-1: label=Manual review, area=risk, severity=high')
+    expect(graph).toContain('AUTO-1: label=Auto review, area=risk, severity=low')
     expect(graph).not.toContain('{\\"label\\":')
   })
 })
