@@ -2,25 +2,39 @@
 
 Model business rules or validation steps with code in a structured way.
 
+Structured flow gives you:
+
+- A way to define a flow of steps with a human-readable API and descriptions
+- API that enforces correctness over hundreds of rules and prevents errors
+- Ready made tools to visualize and document the flow and its execution
+    - Mermaid graphs: the flow and flow results
+    - Markdown HTML tables
+- Evidence of processesed rules
+- Simple API for modeling complex structures
+- Full type enforcement: types are enforced for rule functions and flows
+- Promotes splitting the program code in to smaller functions. Instead of a deep nested validation logic, there's small
+  functions that are called by the flow
+
 <!-- TOC -->
+
 * [Core API](#core-api)
-  * [Flow And Step Execution](#flow-and-step-execution)
-  * [Handling results](#handling-results)
-  * [Rendering results](#rendering-results)
+    * [Flow And Step Execution](#flow-and-step-execution)
+    * [Handling results](#handling-results)
+    * [Rendering results](#rendering-results)
 * [Code examples](#code-examples)
-  * [Structured StepDescription](#structured-stepdescription)
-  * [Step results and execution visualized](#step-results-and-execution-visualized)
-    * [Flow](#flow)
-    * [Static Graph](#static-graph)
-    * [Passing Demo](#passing-demo)
-    * [Failing Demo](#failing-demo)
-    * [Stop Demo](#stop-demo)
-    * [Exception Demo](#exception-demo)
-  * [branch() examples](#branch-examples)
-    * [One Of Three Branches](#one-of-three-branches)
-    * [Two Of Three Branches](#two-of-three-branches)
-    * [Nested Branch](#nested-branch)
-    * [Skipped Branch](#skipped-branch)
+    * [Structured StepDescription](#structured-stepdescription)
+    * [Step results and execution visualized](#step-results-and-execution-visualized)
+        * [Flow](#flow)
+        * [Static Graph](#static-graph)
+        * [Passing Demo](#passing-demo)
+        * [Failing Demo](#failing-demo)
+        * [Stop Demo](#stop-demo)
+        * [Exception Demo](#exception-demo)
+    * [branch() examples](#branch-examples)
+        * [One Of Three Branches](#one-of-three-branches)
+        * [Two Of Three Branches](#two-of-three-branches)
+        * [Nested Branch](#nested-branch)
+        * [Skipped Branch](#skipped-branch)
 <!-- TOC -->
 
 # Core API
@@ -64,22 +78,34 @@ if (!result.ok) {
   throw new Error(`Validation failed: ${result.failedStepIds().join(', ')}`)
 }
 ```
+
 ## Flow And Step Execution
 
 Each step receives the initial or acculated context object and each step function returns a `StepResult`.
 
 `StepResult` contains the following fields:
+
 - `result` controls execution of the flow and the execution of the following steps
-  - `ok` or undefined mean that the step was completed successfully.
-  - `error` means that the step failed and execution continues.
-  - Thrown errors are recorded as `exception`m but exception can be returned with code also
-  - `stop` means that the step failed and execution stops.
-  - `skip` does not continue
+    - `ok` or undefined mean that the step was completed successfully.
+    - `error` means that the step failed and execution continues.
+    - Thrown errors are recorded as `exception`m but exception can be returned with code also
+    - `stop` means that the step failed and execution stops.
+    - `skip` does not continue
 - `info` is copied into `stepResults`
 - other returned fields are added to the ctx
 
-A branch step calls the selector function and can return one key, many keys, or a direct status like `skip`, `error`, `stop`, or
+A branch step calls the selector function and can return one key, many keys, or a direct status like `skip`, `error`,
+`stop`, or
 `exception`. Child flows run from the parent ctx, but their ctx additions stay inside the branch result.
+
+A list step iterates the current ctx when it is an array. It supports:
+- `.list<State>(id, description, runItem)`
+- `.list<State>(id, description, flow)`
+- `.list<State>(id, description, mapItem, flow)`
+
+Function mode receives `{ ctx, item, state? }`. Flow mode passes `{ ctx, item, state? }` to the child flow. Mapper mode can
+return `true`, `false`, `undefined`, or a mapped object with `item`, optional `ctx`, optional `state`, and optional immediate
+`result`/`info`.
 
 The table below shows how each recorded `result` affects execution and ctx updates:
 
@@ -98,7 +124,8 @@ The table below shows how each recorded `result` affects execution and ctx updat
 - `result.failedStepIds()` returns failed ids from the main flow and nested branch flows.
 - `result.failedStepIds({ branchPrefix: true })` prefixes nested branch failures with their parent branch step ids.
 - Each `stepResult` records `id`, `result`, optional `info`, optional `addToCtx`, and optional nested `branches`.
-- `result.enrichResult()` returns an enriched results object which contains the step's `description` to each recorded step result, including nested branch results.
+- `result.enrichResult()` returns an enriched results object which contains the step's `description` to each recorded
+  step result, including nested branch results.
 
 ## Rendering results
 
