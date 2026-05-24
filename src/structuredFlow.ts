@@ -42,6 +42,10 @@ export type EnrichedBranchRunResult<Key extends string = string, StepDefinition 
   stepResults: Array<EnrichedFlowStepResult<StepDefinition>>
 }
 
+export type FailedStepIdOptions = {
+  branchPrefix?: boolean
+}
+
 type FlowRunResult<Mode extends FlowMode, Steps extends readonly AnyStepDefinition[], Ctx> = Mode extends 'sync'
   ? FlowResult<Steps, Ctx>
   : Promise<FlowResult<Steps, Ctx>>
@@ -131,8 +135,6 @@ type StepAddedCtx<Result> = Omit<Extract<Result, { result?: 'ok' | 'stop' }>, Re
 
 type Step<Steps extends readonly unknown[]> = Steps[number]
 
-type StepId<CurrentStep> = CurrentStep extends { id: infer Id extends string } ? Id : never
-
 type StepInfo<CurrentStep> = CurrentStep extends { fn: StepFn<any, any, infer Info> } ? Info : never
 
 type StepAddToCtx<CurrentStep> = CurrentStep extends { fn: StepFn<any, infer AddCtx, any> } ? AddCtx : never
@@ -157,8 +159,6 @@ type EnrichedStepResultEntry<CurrentStep extends { id: string; description: unkn
   description: StepDescriptionOf<CurrentStep>
   branches?: EnrichedBranchRunResult<string, any>[]
 }
-
-type StepIds<Steps extends readonly unknown[]> = StepId<Step<Steps>>
 
 export function stepResult<AddCtx extends object, Info, const Result extends StepResult<AddCtx, Info>>(
   result: Result
@@ -389,10 +389,23 @@ async function runBranchAsync<
   >
 }
 
-function collectFailedStepIds<Id extends string>(stepResults: readonly { id: Id; result: StepStatus }[]): Id[] {
-  return stepResults
-    .filter((stepResult) => stepResult.result === 'error' || stepResult.result === 'exception')
-    .map((stepResult) => stepResult.id)
+function collectFailedStepIds(
+  stepResults: readonly { id: string; result: StepStatus; branches?: BranchRunResult<string, any>[] }[],
+  options: FailedStepIdOptions = {},
+  branchPath: string[] = []
+): string[] {
+  return stepResults.flatMap((stepResult) => {
+    const ownIds =
+      stepResult.result === 'error' || stepResult.result === 'exception'
+        ? [options.branchPrefix && branchPath.length > 0 ? [...branchPath, stepResult.id].join('/') : stepResult.id]
+        : []
+    const branchIds =
+      stepResult.branches?.flatMap((branch) =>
+        collectFailedStepIds(branch.stepResults, options, [...branchPath, stepResult.id])
+      ) ?? []
+
+    return [...ownIds, ...branchIds]
+  })
 }
 
 // --- Result ---
@@ -405,8 +418,8 @@ export class FlowResult<Steps extends readonly AnyStepDefinition[], Ctx> {
     readonly finalCtx: Expand<Ctx>
   ) {}
 
-  failedStepIds(): StepIds<Steps>[] {
-    return collectFailedStepIds(this.stepResults) as StepIds<Steps>[]
+  failedStepIds(options?: FailedStepIdOptions): string[] {
+    return collectFailedStepIds(this.stepResults, options)
   }
 
   enrichResult(): EnrichedFlowResult<Steps, Ctx> {
@@ -427,8 +440,8 @@ export class EnrichedFlowResult<Steps extends readonly AnyStepDefinition[], Ctx>
     readonly finalCtx: Expand<Ctx>
   ) {}
 
-  failedStepIds(): StepIds<Steps>[] {
-    return collectFailedStepIds(this.stepResults) as StepIds<Steps>[]
+  failedStepIds(options?: FailedStepIdOptions): string[] {
+    return collectFailedStepIds(this.stepResults, options)
   }
 }
 

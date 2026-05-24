@@ -545,7 +545,8 @@ describe('FlowBuilder.branch', () => {
     const result = await flow.run({ mode: 'all' })
 
     expect(result.ok).toBe(false)
-    expect(result.failedStepIds()).toEqual(['BR-SEVERITY'])
+    expect(result.failedStepIds()).toEqual(['BR-SEVERITY', 'EX-1'])
+    expect(result.failedStepIds({ branchPrefix: true })).toEqual(['BR-SEVERITY', 'BR-SEVERITY/EX-1'])
     expect(result.stepResults).toEqual([
       {
         id: 'BR-SEVERITY',
@@ -652,7 +653,8 @@ describe('FlowBuilder.branch', () => {
 
     const result = await flow.run({ checks: ['audit', 'rules'] })
 
-    expect(result.failedStepIds()).toEqual(['BR-FAILED-IDS'])
+    expect(result.failedStepIds()).toEqual(['BR-FAILED-IDS', 'RULES-1'])
+    expect(result.failedStepIds({ branchPrefix: true })).toEqual(['BR-FAILED-IDS', 'BR-FAILED-IDS/RULES-1'])
     expect(result.stepResults[0]).toMatchObject({
       id: 'BR-FAILED-IDS',
       result: 'error',

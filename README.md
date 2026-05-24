@@ -2,25 +2,39 @@
 
 Model business rules or validation steps with code in a structured way.
 
+Structured flow gives you:
+
+- A way to define a flow of steps with a human-readable API and descriptions
+- API that enforces correctness over hundreds of rules and prevents errors
+- Ready made tools to visualize and document the flow and its execution
+    - Mermaid graphs: the flow and flow results
+    - Markdown HTML tables
+- Evidence of processesed rules
+- Simple API for modeling complex structures
+- Full type enforcement: types are enforced for rule functions and flows
+- Promotes splitting the program code in to smaller functions. Instead of a deep nested validation logic, there's small
+  functions that are called by the flow
+
 <!-- TOC -->
+
 * [Core API](#core-api)
-  * [Flow And Step Execution](#flow-and-step-execution)
-  * [Handling results](#handling-results)
-  * [Rendering results](#rendering-results)
+    * [Flow And Step Execution](#flow-and-step-execution)
+    * [Handling results](#handling-results)
+    * [Rendering results](#rendering-results)
 * [Code examples](#code-examples)
-  * [Structured StepDescription](#structured-stepdescription)
-  * [Step results and execution visualized](#step-results-and-execution-visualized)
-    * [Flow](#flow)
-    * [Static Graph](#static-graph)
-    * [Passing Demo](#passing-demo)
-    * [Failing Demo](#failing-demo)
-    * [Stop Demo](#stop-demo)
-    * [Exception Demo](#exception-demo)
-  * [branch() examples](#branch-examples)
-    * [One Of Three Branches](#one-of-three-branches)
-    * [Two Of Three Branches](#two-of-three-branches)
-    * [Nested Branch](#nested-branch)
-    * [Skipped Branch](#skipped-branch)
+    * [Structured StepDescription](#structured-stepdescription)
+    * [Step results and execution visualized](#step-results-and-execution-visualized)
+        * [Flow](#flow)
+        * [Static Graph](#static-graph)
+        * [Passing Demo](#passing-demo)
+        * [Failing Demo](#failing-demo)
+        * [Stop Demo](#stop-demo)
+        * [Exception Demo](#exception-demo)
+    * [branch() examples](#branch-examples)
+        * [One Of Three Branches](#one-of-three-branches)
+        * [Two Of Three Branches](#two-of-three-branches)
+        * [Nested Branch](#nested-branch)
+        * [Skipped Branch](#skipped-branch)
 <!-- TOC -->
 
 # Core API
@@ -64,22 +78,34 @@ if (!result.ok) {
   throw new Error(`Validation failed: ${result.failedStepIds().join(', ')}`)
 }
 ```
+
 ## Flow And Step Execution
 
 Each step receives the initial or acculated context object and each step function returns a `StepResult`.
 
 `StepResult` contains the following fields:
+
 - `result` controls execution of the flow and the execution of the following steps
-  - `ok` or undefined mean that the step was completed successfully.
-  - `error` means that the step failed and execution continues.
-  - Thrown errors are recorded as `exception`m but exception can be returned with code also
-  - `stop` means that the step failed and execution stops.
-  - `skip` does not continue
+    - `ok` or undefined mean that the step was completed successfully.
+    - `error` means that the step failed and execution continues.
+    - Thrown errors are recorded as `exception`m but exception can be returned with code also
+    - `stop` means that the step failed and execution stops.
+    - `skip` does not continue
 - `info` is copied into `stepResults`
 - other returned fields are added to the ctx
 
-A branch step calls the selector function and can return one key, many keys, or a direct status like `skip`, `error`, `stop`, or
+A branch step calls the selector function and can return one key, many keys, or a direct status like `skip`, `error`,
+`stop`, or
 `exception`. Child flows run from the parent ctx, but their ctx additions stay inside the branch result.
+
+A list step iterates the current ctx when it is an array. It supports:
+- `.list<State>(id, description, runItem)`
+- `.list<State>(id, description, flow)`
+- `.list<State>(id, description, mapItem, flow)`
+
+Function mode receives `{ ctx, item, state? }`. Flow mode passes `{ ctx, item, state? }` to the child flow. Mapper mode can
+return `true`, `false`, `undefined`, or a mapped object with `item`, optional `ctx`, optional `state`, and optional immediate
+`result`/`info`.
 
 The table below shows how each recorded `result` affects execution and ctx updates:
 
@@ -95,9 +121,11 @@ The table below shows how each recorded `result` affects execution and ctx updat
 
 - `FlowResult` exposes `ok`, `finalCtx`, `stepResults`, and `failedStepIds()`.
 - Use `result.ok` for the top-level pass/fail check.
-- Use `result.failedStepIds()` to list the failed step ids.
+- `result.failedStepIds()` returns failed ids from the main flow and nested branch flows.
+- `result.failedStepIds({ branchPrefix: true })` prefixes nested branch failures with their parent branch step ids.
 - Each `stepResult` records `id`, `result`, optional `info`, optional `addToCtx`, and optional nested `branches`.
-- `result.enrichResult()` returns an enriched results object which contains the step's `description` to each recorded step result, including nested branch results.
+- `result.enrichResult()` returns an enriched results object which contains the step's `description` to each recorded
+  step result, including nested branch results.
 
 ## Rendering results
 
@@ -184,7 +212,7 @@ const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
         &quot;kind&quot;: &quot;arrow-function&quot;,
         &quot;async&quot;: false,
         &quot;params&quot;: &quot;(ctx)&quot;,
-        &quot;bodyPreview&quot;: &quot;runBranchSync(id, ctx, selectBranches, normalizedBranches)&quot;
+        &quot;bodyPreview&quot;: &quot;new BranchSync(id, ctx, selectBranches, normalizedBranches).execute()&quot;
       }
     }
   ],
@@ -1258,7 +1286,8 @@ const twoOfThreeBranchFlow = createAsyncFlow(
 <code>{
   &quot;ok&quot;: false,
   &quot;failedStepIds&quot;: [
-    &quot;CHECKS&quot;
+    &quot;CHECKS&quot;,
+    &quot;FRAUD-1&quot;
   ],
   &quot;stepResults&quot;: [
     {
@@ -1406,7 +1435,7 @@ Fraud review failed."]
 ```
 <!-- structured-process-demo:branch-two-of-three-demo:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> CHECKS</p>
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> CHECKS, FRAUD-1</p>
 <!-- structured-process-demo:branch-two-of-three-demo:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
