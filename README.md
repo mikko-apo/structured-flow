@@ -197,8 +197,8 @@ const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
       &quot;fn&quot;: {
         &quot;kind&quot;: &quot;arrow-function&quot;,
         &quot;async&quot;: false,
-        &quot;params&quot;: &quot;({ amount })&quot;,
-        &quot;bodyPreview&quot;: &quot;({ normalizedAmount: Math.abs(amount) })&quot;
+        &quot;params&quot;: &quot;({amount})&quot;,
+        &quot;bodyPreview&quot;: &quot;({normalizedAmount:Math.abs(amount)})&quot;
       }
     },
     {
@@ -211,8 +211,8 @@ const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
       &quot;fn&quot;: {
         &quot;kind&quot;: &quot;arrow-function&quot;,
         &quot;async&quot;: false,
-        &quot;params&quot;: &quot;(ctx)&quot;,
-        &quot;bodyPreview&quot;: &quot;new BranchSync(id, ctx, selectBranches, normalizedBranches).execute()&quot;
+        &quot;params&quot;: &quot;ctx&quot;,
+        &quot;bodyPreview&quot;: &quot;branch.run(ctx)&quot;
       }
     }
   ],
@@ -463,7 +463,7 @@ This is the same flow before execution.
 
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>No run result yet.</p></div><div><div>
 
-<!-- structured-process-demo:static-graph:mermaid:start -->
+<!-- structured-process-demo:sequence-static-graph:mermaid:start -->
 ```mermaid
 flowchart TD
   start([Start])
@@ -482,11 +482,11 @@ flowchart TD
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
   classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
 ```
-<!-- structured-process-demo:static-graph:mermaid:end -->
+<!-- structured-process-demo:sequence-static-graph:mermaid:end -->
 
-</div></div><div><!-- structured-process-demo:static-graph:html-table:start -->
+</div></div><div><!-- structured-process-demo:sequence-static-graph:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th></tr></thead><tbody><tr><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC10</td><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Get linked occupancy records</td></tr><tr><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC25</td><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Count the recovered occupancy trail and insist on exactly two records</td></tr><tr><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC30</td><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Cross-check the submitted form against the recovered occupancy trail</td></tr></tbody></table>
-<!-- structured-process-demo:static-graph:html-table:end --></div></div>
+<!-- structured-process-demo:sequence-static-graph:html-table:end --></div></div>
 
 ### Passing Demo
 
@@ -495,7 +495,7 @@ Happy path: every step runs and the flow ends with `ok`.
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
-<!-- structured-process-demo:passing-demo-init:json:start -->
+<!-- structured-process-demo:sequence-passing-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;form&quot;: {
@@ -503,10 +503,10 @@ Happy path: every step runs and the flow ends with `ok`.
   }
 }</code>
 </pre>
-<!-- structured-process-demo:passing-demo-init:json:end -->
+<!-- structured-process-demo:sequence-passing-init:json:end -->
 
 <p><strong>Resulting JSON</strong></p>
-<!-- structured-process-demo:passing-demo-result:json:start -->
+<!-- structured-process-demo:sequence-passing-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;ok&quot;: true,
@@ -552,11 +552,11 @@ Happy path: every step runs and the flow ends with `ok`.
   }
 }</code>
 </pre>
-<!-- structured-process-demo:passing-demo-result:json:end -->
+<!-- structured-process-demo:sequence-passing-result:json:end -->
 
 </div></div><div><div>
 
-<!-- structured-process-demo:passing-demo:mermaid:start -->
+<!-- structured-process-demo:sequence-passing:mermaid:start -->
 ```mermaid
 flowchart TD
   start([Start])
@@ -585,10 +585,10 @@ The submitted form and occupancy trail tell a consistent story."]
   class start executed
   class done success
 ```
-<!-- structured-process-demo:passing-demo:mermaid:end -->
+<!-- structured-process-demo:sequence-passing:mermaid:end -->
 
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span><br><strong>Failed steps:</strong> none</p>
-<!-- structured-process-demo:passing-demo:html-table:start -->
+<!-- structured-process-demo:sequence-passing:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
@@ -614,7 +614,7 @@ The submitted form and occupancy trail tell a consistent story."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
-<!-- structured-process-demo:passing-demo:html-table:end --></div></div>
+<!-- structured-process-demo:sequence-passing:html-table:end --></div></div>
 
 ### Failing Demo
 
@@ -623,7 +623,7 @@ A step returns `error`. Execution continues, but the overall result is failed.
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
-<!-- structured-process-demo:failing-demo-init:json:start -->
+<!-- structured-process-demo:sequence-failing-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;form&quot;: {
@@ -631,10 +631,10 @@ A step returns `error`. Execution continues, but the overall result is failed.
   }
 }</code>
 </pre>
-<!-- structured-process-demo:failing-demo-init:json:end -->
+<!-- structured-process-demo:sequence-failing-init:json:end -->
 
 <p><strong>Resulting JSON</strong></p>
-<!-- structured-process-demo:failing-demo-result:json:start -->
+<!-- structured-process-demo:sequence-failing-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;ok&quot;: false,
@@ -676,11 +676,11 @@ A step returns `error`. Execution continues, but the overall result is failed.
   }
 }</code>
 </pre>
-<!-- structured-process-demo:failing-demo-result:json:end -->
+<!-- structured-process-demo:sequence-failing-result:json:end -->
 
 </div></div><div><div>
 
-<!-- structured-process-demo:failing-demo:mermaid:start -->
+<!-- structured-process-demo:sequence-failing:mermaid:start -->
 ```mermaid
 flowchart TD
   start([Start])
@@ -709,10 +709,10 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
   class start executed
   class done failure
 ```
-<!-- structured-process-demo:failing-demo:mermaid:end -->
+<!-- structured-process-demo:sequence-failing:mermaid:end -->
 
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> IC25</p>
-<!-- structured-process-demo:failing-demo:html-table:start -->
+<!-- structured-process-demo:sequence-failing:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
@@ -738,7 +738,7 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
-<!-- structured-process-demo:failing-demo:html-table:end --></div></div>
+<!-- structured-process-demo:sequence-failing:html-table:end --></div></div>
 
 ### Stop Demo
 
@@ -747,7 +747,7 @@ A step returns `stop`, so later steps are recorded as `skip`.
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
-<!-- structured-process-demo:stop-demo-init:json:start -->
+<!-- structured-process-demo:sequence-stop-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;form&quot;: {
@@ -755,10 +755,10 @@ A step returns `stop`, so later steps are recorded as `skip`.
   }
 }</code>
 </pre>
-<!-- structured-process-demo:stop-demo-init:json:end -->
+<!-- structured-process-demo:sequence-stop-init:json:end -->
 
 <p><strong>Resulting JSON</strong></p>
-<!-- structured-process-demo:stop-demo-result:json:start -->
+<!-- structured-process-demo:sequence-stop-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;ok&quot;: true,
@@ -803,11 +803,11 @@ A step returns `stop`, so later steps are recorded as `skip`.
   }
 }</code>
 </pre>
-<!-- structured-process-demo:stop-demo-result:json:end -->
+<!-- structured-process-demo:sequence-stop-result:json:end -->
 
 </div></div><div><div>
 
-<!-- structured-process-demo:stop-demo:mermaid:start -->
+<!-- structured-process-demo:sequence-stop:mermaid:start -->
 ```mermaid
 flowchart TD
   start([Start])
@@ -835,10 +835,10 @@ The first two records are enough here, so the sequence can finish early."]
   class start executed
   class done success
 ```
-<!-- structured-process-demo:stop-demo:mermaid:end -->
+<!-- structured-process-demo:sequence-stop:mermaid:end -->
 
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f0fdf4;color:#166534;border:1px solid #86efac;">completed early</span><br><strong>Failed steps:</strong> none</p>
-<!-- structured-process-demo:stop-demo:html-table:start -->
+<!-- structured-process-demo:sequence-stop:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
@@ -864,7 +864,7 @@ The first two records are enough here, so the sequence can finish early."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
-<!-- structured-process-demo:stop-demo:html-table:end --></div></div>
+<!-- structured-process-demo:sequence-stop:html-table:end --></div></div>
 
 ### Exception Demo
 
@@ -873,7 +873,7 @@ An exception ends the flow immediately and marks the rest as `skip`.
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
-<!-- structured-process-demo:exception-demo-init:json:start -->
+<!-- structured-process-demo:sequence-exception-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;form&quot;: {
@@ -881,10 +881,10 @@ An exception ends the flow immediately and marks the rest as `skip`.
   }
 }</code>
 </pre>
-<!-- structured-process-demo:exception-demo-init:json:end -->
+<!-- structured-process-demo:sequence-exception-init:json:end -->
 
 <p><strong>Resulting JSON</strong></p>
-<!-- structured-process-demo:exception-demo-result:json:start -->
+<!-- structured-process-demo:sequence-exception-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;ok&quot;: false,
@@ -931,11 +931,11 @@ An exception ends the flow immediately and marks the rest as `skip`.
   }
 }</code>
 </pre>
-<!-- structured-process-demo:exception-demo-result:json:end -->
+<!-- structured-process-demo:sequence-exception-result:json:end -->
 
 </div></div><div><div>
 
-<!-- structured-process-demo:exception-demo:mermaid:start -->
+<!-- structured-process-demo:sequence-exception:mermaid:start -->
 ```mermaid
 flowchart TD
   start([Start])
@@ -963,10 +963,10 @@ A contradictory record was discovered, so the sequence stops immediately."]
   class start executed
   class done failure
 ```
-<!-- structured-process-demo:exception-demo:mermaid:end -->
+<!-- structured-process-demo:sequence-exception:mermaid:end -->
 
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">stopped by exception</span><br><strong>Failed steps:</strong> IC25</p>
-<!-- structured-process-demo:exception-demo:html-table:start -->
+<!-- structured-process-demo:sequence-exception:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
@@ -992,7 +992,7 @@ A contradictory record was discovered, so the sequence stops immediately."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
-<!-- structured-process-demo:exception-demo:html-table:end --></div></div>
+<!-- structured-process-demo:sequence-exception:html-table:end --></div></div>
 
 ## branch() examples
 

@@ -145,7 +145,7 @@ the stored flow definition.
 
 {{STRUCTURED_STEP_DESCRIPTION_FLOW_JSON}}
 
-{{STRUCTURED_STEP_DESCRIPTION_DEMO_SECTION}}
+{{STRUCTURED_STEP_DESCRIPTION_DEMO_FULL_TABLE}}
 
 ## Step results and execution visualized
 
@@ -159,31 +159,31 @@ This is the source flow used by the graph and run examples below.
 
 This is the same flow before execution.
 
-{{STATIC_GRAPH_SECTION}}
+{{SEQUENCE_STATIC_GRAPH}}
 
 ### Passing Demo
 
 Happy path: every step runs and the flow ends with `ok`.
 
-{{PASSING_DEMO_SECTION}}
+{{SEQUENCE_PASSING_FULL_TABLE}}
 
 ### Failing Demo
 
 A step returns `error`. Execution continues, but the overall result is failed.
 
-{{FAILING_DEMO_SECTION}}
+{{SEQUENCE_FAILING_FULL_TABLE}}
 
 ### Stop Demo
 
 A step returns `stop`, so later steps are recorded as `skip`.
 
-{{STOP_DEMO_SECTION}}
+{{SEQUENCE_STOP_FULL_TABLE}}
 
 ### Exception Demo
 
 An exception ends the flow immediately and marks the rest as `skip`.
 
-{{EXCEPTION_DEMO_SECTION}}
+{{SEQUENCE_EXCEPTION_FULL_TABLE}}
 
 ## branch() examples
 
@@ -193,7 +193,7 @@ Selector returns one branch key.
 
 {{BRANCH_ONE_OF_THREE_CODE_BLOCK}}
 
-{{BRANCH_ONE_OF_THREE_DEMO_SECTION}}
+{{BRANCH_ONE_OF_THREE_DEMO_FULL_TABLE}}
 
 ### Two Of Three Branches
 
@@ -201,7 +201,7 @@ Selector returns multiple branch keys.
 
 {{BRANCH_TWO_OF_THREE_CODE_BLOCK}}
 
-{{BRANCH_TWO_OF_THREE_DEMO_SECTION}}
+{{BRANCH_TWO_OF_THREE_DEMO_FULL_TABLE}}
 
 ### Nested Branch
 
@@ -209,7 +209,7 @@ A branch can route into another branch flow.
 
 {{NESTED_BRANCH_CODE_BLOCK}}
 
-{{NESTED_BRANCH_DEMO_SECTION}}
+{{NESTED_BRANCH_DEMO_FULL_TABLE}}
 
 ### Skipped Branch
 
@@ -217,4 +217,4 @@ Selector returns 'skip' status instead of branch keys.
 
 {{BRANCH_SKIP_CODE_BLOCK}}
 
-{{BRANCH_SKIP_DEMO_SECTION}}
+{{BRANCH_SKIP_DEMO_FULL_TABLE}}
