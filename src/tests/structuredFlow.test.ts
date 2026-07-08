@@ -106,6 +106,46 @@ describe('structuredFlow core execution', () => {
     ])
   })
 
+  it('keeps ok-path ctx available to later steps when the previous step may also stop', async () => {
+    const flow = createAsyncFlow<string, string>('A1', 'Load person', async ({ found }: { found: boolean }) => {
+      if (!found) {
+        return stepResult({
+          result: 'stop',
+          info: 'Person was not found.',
+        })
+      }
+
+      return stepResult({
+        person: { id: 'person-1' },
+      })
+    })
+      .step('A2', 'Use person', async ({ person }) => ({
+        personId: person.id,
+      }))
+      .build()
+
+    const stopResult = await flow.run({ found: false })
+    const okResult = await flow.run({ found: true })
+
+    expect(stopResult.ok).toBe(true)
+    expect(stopResult.finalCtx).toEqual({ found: false })
+    expect(stopResult.stepResults).toEqual([
+      { id: 'A1', result: 'stop', info: 'Person was not found.' },
+      { id: 'A2', result: 'skip' },
+    ])
+
+    expect(okResult.ok).toBe(true)
+    expect(okResult.finalCtx).toEqual({
+      found: true,
+      person: { id: 'person-1' },
+      personId: 'person-1',
+    })
+    expect(okResult.stepResults).toEqual([
+      { id: 'A1', result: 'ok', addToCtx: { person: { id: 'person-1' } } },
+      { id: 'A2', result: 'ok', addToCtx: { personId: 'person-1' } },
+    ])
+  })
+
   it('converts thrown exceptions into exception results and skips the rest', () => {
     const flow = createSyncFlow('S1', 'Throw', ({ amount }: { amount: number }) => {
       if (amount >= 0) {
