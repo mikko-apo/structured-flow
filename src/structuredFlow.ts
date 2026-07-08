@@ -15,6 +15,7 @@ export type FlowStepResult<Id extends string = string, Info = unknown, AddToCtx 
 export type FlowStepDefinition<StepDefinition = string> = {
   id: string
   description: StepDefinition
+  branches?: Record<string, FlowLike<any, StepDefinition, any>>
 }
 
 export type BranchRunResult<Key extends string = string, StepDefinition = string> = {
@@ -119,6 +120,7 @@ type StepDefinition<Id extends string, InputCtx, AddCtx extends object, Info, St
   id: Id
   description: StepDescription
   fn: StepFn<InputCtx, AddCtx, Info>
+  branches?: Record<string, FlowLike<any, StepDescription, any>>
 }
 
 type AnyStepDefinition = StepDefinition<string, any, object, any, any>
@@ -131,7 +133,8 @@ type NoReservedStepFields<T> = keyof T & ReservedStepField extends never ? T : n
 
 type Expand<T> = T extends infer O ? { [K in keyof O]: O[K] } : never
 
-type StepAddedCtx<Result> = Omit<Extract<Result, { result?: 'ok' | 'stop' }>, ReservedStepField>
+type StepContinueCtx<Result> = Omit<Extract<Result, { result?: 'ok' }>, ReservedStepField>
+type StepFinalCtx<Result> = Omit<Extract<Result, { result?: 'ok' | 'stop' }>, ReservedStepField>
 
 type Step<Steps extends readonly unknown[]> = Steps[number]
 
@@ -143,7 +146,15 @@ type StepDescriptionOf<CurrentStep> = CurrentStep extends { description: infer S
   ? StepDescription
   : never
 type StepInputCtx<Fn> = Fn extends (ctx: infer Ctx) => any ? Ctx : never
+type StepOutput<Fn> = Fn extends (...args: any[]) => infer Result ? Result : never
 type NormalizeStepDescription<StepDescription> = StepDescription extends string ? string : StepDescription
+type ValidateStepFn<Fn, ExpectedCtx extends object, Mode extends FlowMode, Info> = Fn extends (ctx: any) => any
+  ? Expand<ExpectedCtx> extends StepInputCtx<Fn>
+    ? StepReturnByMode<Mode, StepOutput<Fn>, Info> extends StepOutput<Fn>
+      ? Fn
+      : never
+    : never
+  : never
 
 type StepResultEntry<CurrentStep extends { id: string }> = Pick<CurrentStep, 'id'> & {
   result: StepStatus
@@ -644,7 +655,7 @@ function executeFlow<InitialCtx extends object, Ctx extends object, Steps extend
 class Flow<
   StepDescription = string,
   InitialCtx extends object = object,
-  Ctx extends object = InitialCtx,
+  FinalCtx extends object = InitialCtx,
   Steps extends readonly StepDefinition<any, any, any, any, StepDescription>[] = [],
   Mode extends FlowMode = FlowMode,
 > {
@@ -653,12 +664,20 @@ class Flow<
     private readonly mode: Mode
   ) {}
 
-  run(initial: InitialCtx): FlowRunResult<Mode, Steps, Ctx> {
+  run(initial: InitialCtx): FlowRunResult<Mode, Steps, FinalCtx> {
     if (this.mode === 'sync') {
-      return executeFlow<InitialCtx, Ctx, Steps>(this.steps, initial, 'sync') as FlowRunResult<Mode, Steps, Ctx>
+      return executeFlow<InitialCtx, FinalCtx, Steps>(this.steps, initial, 'sync') as FlowRunResult<
+        Mode,
+        Steps,
+        FinalCtx
+      >
     }
 
-    return executeFlow<InitialCtx, Ctx, Steps>(this.steps, initial, 'async') as FlowRunResult<Mode, Steps, Ctx>
+    return executeFlow<InitialCtx, FinalCtx, Steps>(this.steps, initial, 'async') as FlowRunResult<
+      Mode,
+      Steps,
+      FinalCtx
+    >
   }
 }
 
@@ -667,7 +686,8 @@ class Flow<
 class FlowBuilder<
   StepDescription = string,
   InitialCtx extends object = object,
-  Ctx extends object = InitialCtx,
+  NextStepCtx extends object = InitialCtx,
+  FinalCtx extends object = InitialCtx,
   Info = unknown,
   Steps extends readonly StepDefinition<any, any, any, any, StepDescription>[] = [],
   Mode extends FlowMode = FlowMode,
@@ -677,20 +697,32 @@ class FlowBuilder<
     private readonly mode: Mode
   ) {}
 
-  step<Id extends string, Result>(
+  step<Id extends string, Fn extends (ctx: any) => any, Result = StepOutput<Fn>>(
     id: Id,
     stepDescription: StepDescription,
-    fn: (ctx: Expand<Ctx>) => StepReturnByMode<Mode, Result, Info>
+    fn: ValidateStepFn<Fn, NextStepCtx, Mode, Info>
   ) {
-    type AddCtx = NoOverlap<NoReservedStepFields<StepAddedCtx<ResolvedStepReturn<Mode, Result, Info>>>, Ctx>
+    type ContinueCtx = NoOverlap<
+      NoReservedStepFields<StepContinueCtx<ResolvedStepReturn<Mode, Result, Info>>>,
+      NextStepCtx
+    >
+    type AddCtx = NoOverlap<NoReservedStepFields<StepFinalCtx<ResolvedStepReturn<Mode, Result, Info>>>, FinalCtx>
 
-    const newStep: StepDefinition<Id, Expand<Ctx>, AddCtx, Info, StepDescription> = {
+    const newStep: StepDefinition<Id, Expand<NextStepCtx>, AddCtx, Info, StepDescription> = {
       id,
       description: stepDescription,
-      fn: fn as StepFn<Expand<Ctx>, AddCtx, Info>,
+      fn: fn as StepFn<Expand<NextStepCtx>, AddCtx, Info>,
     }
 
-    return new FlowBuilder<StepDescription, InitialCtx, Expand<Ctx & AddCtx>, Info, [...Steps, typeof newStep], Mode>(
+    return new FlowBuilder<
+      StepDescription,
+      InitialCtx,
+      Expand<NextStepCtx & ContinueCtx>,
+      Expand<FinalCtx & AddCtx>,
+      Info,
+      [...Steps, typeof newStep],
+      Mode
+    >(
       [...this.steps, newStep] as [...Steps, typeof newStep],
       this.mode
     )
@@ -699,22 +731,25 @@ class FlowBuilder<
   branch<
     Id extends string,
     TBranches extends Mode extends 'sync'
-      ? FlowBranchSources<Expand<Ctx>, StepDescription, FlowResult<any, any>>
-      : FlowBranchSources<Expand<Ctx>, StepDescription>,
+      ? FlowBranchSources<Expand<NextStepCtx>, StepDescription, FlowResult<any, any>>
+      : FlowBranchSources<Expand<NextStepCtx>, StepDescription>,
   >(
     id: Id,
     stepDescription: StepDescription,
-    select: (ctx: Expand<Ctx>) => BranchSelection<BranchKey<TBranches>>,
+    select: (ctx: Expand<NextStepCtx>) => BranchSelection<BranchKey<TBranches>>,
     branches: TBranches
   ) {
-    const selectBranches = select as (ctx: Expand<Ctx>) => BranchSelection<string>
+    const selectBranches = select as (ctx: Expand<NextStepCtx>) => BranchSelection<string>
     const normalizedBranches =
       this.mode === 'sync'
-        ? normalizeFlowBranches(branches as FlowBranchSources<Expand<Ctx>, StepDescription, FlowResult<any, any>>)
-        : normalizeFlowBranches(branches as FlowBranchSources<Expand<Ctx>, StepDescription>)
-    const newStep: StepDefinition<Id, Expand<Ctx>, Record<never, never>, Info, StepDescription> = {
+        ? normalizeFlowBranches(
+            branches as FlowBranchSources<Expand<NextStepCtx>, StepDescription, FlowResult<any, any>>
+          )
+        : normalizeFlowBranches(branches as FlowBranchSources<Expand<NextStepCtx>, StepDescription>)
+    const newStep: StepDefinition<Id, Expand<NextStepCtx>, Record<never, never>, Info, StepDescription> = {
       id,
       description: stepDescription,
+      branches: normalizedBranches as Record<string, FlowLike<any, StepDescription, any>>,
       fn:
         this.mode === 'sync'
           ? (ctx) =>
@@ -722,20 +757,33 @@ class FlowBuilder<
                 id,
                 ctx,
                 selectBranches,
-                normalizedBranches as FlowBranches<Expand<Ctx>, StepDescription, FlowResult<any, any>>
+                normalizedBranches as FlowBranches<Expand<NextStepCtx>, StepDescription, FlowResult<any, any>>
               )
           : (ctx) =>
-              runBranchAsync(id, ctx, selectBranches, normalizedBranches as FlowBranches<Expand<Ctx>, StepDescription>),
+              runBranchAsync(
+                id,
+                ctx,
+                selectBranches,
+                normalizedBranches as FlowBranches<Expand<NextStepCtx>, StepDescription>
+              ),
     }
 
-    return new FlowBuilder<StepDescription, InitialCtx, Ctx, Info, [...Steps, typeof newStep], Mode>(
+    return new FlowBuilder<
+      StepDescription,
+      InitialCtx,
+      NextStepCtx,
+      FinalCtx,
+      Info,
+      [...Steps, typeof newStep],
+      Mode
+    >(
       [...this.steps, newStep] as [...Steps, typeof newStep],
       this.mode
     )
   }
 
   build() {
-    return new Flow<StepDescription, InitialCtx, Ctx, Steps, Mode>(this.steps, this.mode)
+    return new Flow<StepDescription, InitialCtx, FinalCtx, Steps, Mode>(this.steps, this.mode)
   }
 }
 
@@ -761,10 +809,12 @@ type FlowBuilderAfterFirstStep<
   InitialCtx extends object,
   Info,
   Id extends string,
+  ContinueCtx extends object,
   AddCtx extends object,
 > = FlowBuilder<
   NormalizeStepDescription<StepDescription>,
   InitialCtx,
+  Expand<InitialCtx & ContinueCtx>,
   Expand<InitialCtx & AddCtx>,
   Info,
   [FirstStepDefinition<NormalizeStepDescription<StepDescription>, InitialCtx, Info, Id, AddCtx>],
@@ -783,6 +833,7 @@ type FlowBuilderAfterFirstBranch<
   NormalizeStepDescription<StepDescription>,
   InitialCtx,
   InitialCtx,
+  InitialCtx,
   Info,
   [FirstBranchDefinition<NormalizeStepDescription<StepDescription>, InitialCtx, Info, Id>],
   Mode
@@ -794,7 +845,7 @@ type CreateFlowArgs =
   | [string, unknown, (...args: any[]) => any, Record<string, any>]
 
 function createFlow<Mode extends FlowMode>(mode: Mode, ...args: CreateFlowArgs) {
-  const builder = new FlowBuilder<any, any, any, any, [], Mode>([], mode)
+  const builder = new FlowBuilder<any, any, any, any, any, [], Mode>([], mode)
 
   if (args.length === 0) {
     return builder
@@ -815,12 +866,14 @@ export function createSyncFlow<InitialCtx extends object, Info = unknown>(): Flo
   string,
   InitialCtx,
   InitialCtx,
+  InitialCtx,
   Info,
   [],
   'sync'
 >
 export function createSyncFlow<StepDescription, InitialCtx extends object, Info = unknown>(): FlowBuilder<
   StepDescription,
+  InitialCtx,
   InitialCtx,
   InitialCtx,
   Info,
@@ -830,19 +883,26 @@ export function createSyncFlow<StepDescription, InitialCtx extends object, Info 
 export function createSyncFlow<
   const StepDescription = string,
   Info = unknown,
-  Fn extends (ctx: any) => StepResult<any, Info> = (ctx: any) => StepResult<object, Info>,
+  Fn extends (ctx: any) => any = (ctx: any) => StepResult<object, Info>,
   Id extends string = string,
 >(
   id: Id,
   stepDescription: StepDescription,
-  fn: Fn
+  fn: ValidateStepFn<Fn, StepInputCtx<Fn>, 'sync', Info>
 ): FlowBuilderAfterFirstStep<
   'sync',
   StepDescription,
   Expand<StepInputCtx<Fn>>,
   Info,
   Id,
-  NoOverlap<NoReservedStepFields<StepAddedCtx<ReturnType<Fn>>>, Expand<StepInputCtx<Fn>>>
+  NoOverlap<
+    NoReservedStepFields<StepContinueCtx<ResolvedStepReturn<'sync', ReturnType<Fn>, Info>>>,
+    Expand<StepInputCtx<Fn>>
+  >,
+  NoOverlap<
+    NoReservedStepFields<StepFinalCtx<ResolvedStepReturn<'sync', ReturnType<Fn>, Info>>>,
+    Expand<StepInputCtx<Fn>>
+  >
 >
 export function createSyncFlow<
   const StepDescription = string,
@@ -868,12 +928,14 @@ export function createAsyncFlow<InitialCtx extends object, Info = unknown>(): Fl
   string,
   InitialCtx,
   InitialCtx,
+  InitialCtx,
   Info,
   [],
   'async'
 >
 export function createAsyncFlow<StepDescription, InitialCtx extends object, Info = unknown>(): FlowBuilder<
   StepDescription,
+  InitialCtx,
   InitialCtx,
   InitialCtx,
   Info,
@@ -883,19 +945,26 @@ export function createAsyncFlow<StepDescription, InitialCtx extends object, Info
 export function createAsyncFlow<
   const StepDescription = string,
   Info = unknown,
-  Fn extends (ctx: any) => MaybePromise<StepResult<any, Info>> = (ctx: any) => MaybePromise<StepResult<object, Info>>,
+  Fn extends (ctx: any) => any = (ctx: any) => MaybePromise<StepResult<object, Info>>,
   Id extends string = string,
 >(
   id: Id,
   stepDescription: StepDescription,
-  fn: Fn
+  fn: ValidateStepFn<Fn, StepInputCtx<Fn>, 'async', Info>
 ): FlowBuilderAfterFirstStep<
   'async',
   StepDescription,
   Expand<StepInputCtx<Fn>>,
   Info,
   Id,
-  NoOverlap<NoReservedStepFields<StepAddedCtx<Awaited<ReturnType<Fn>>>>, Expand<StepInputCtx<Fn>>>
+  NoOverlap<
+    NoReservedStepFields<StepContinueCtx<ResolvedStepReturn<'async', ReturnType<Fn>, Info>>>,
+    Expand<StepInputCtx<Fn>>
+  >,
+  NoOverlap<
+    NoReservedStepFields<StepFinalCtx<ResolvedStepReturn<'async', ReturnType<Fn>, Info>>>,
+    Expand<StepInputCtx<Fn>>
+  >
 >
 export function createAsyncFlow<
   const StepDescription = string,

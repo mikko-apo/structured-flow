@@ -52,6 +52,32 @@ describe('renderProcessAsMermaidGraph branch rendering', () => {
     expect(graph).not.toContain('branch_0_result')
   })
 
+  it('renders static branch graphs from flow metadata', () => {
+    const incomeFlow = createSyncFlow('IN-1', 'Handle income', ({ kind }: { kind: 'income' | 'expense' }) => ({
+      accepted: kind === 'income',
+    })).build()
+
+    const expenseFlow = createSyncFlow('EX-1', 'Handle expense', ({ kind }: { kind: 'income' | 'expense' }) => ({
+      accepted: kind === 'expense',
+    })).build()
+
+    const flow = createSyncFlow('ROUTE', 'Route kind', ({ kind }: { kind: 'income' | 'expense' }) => kind, {
+      income: incomeFlow,
+      expense: expenseFlow,
+    }).build()
+
+    const graph = renderProcessAsMermaidGraph(flow)
+
+    expect(graph).toContain('step_0["ROUTE: Route kind\nbranches: income, expense"]')
+    expect(graph).toContain('branch_0_0_start["Branch: income"]')
+    expect(graph).toContain('branch_0_0_step_0["IN-1: Handle income"]')
+    expect(graph).toContain('branch_0_1_start["Branch: expense"]')
+    expect(graph).toContain('branch_0_1_step_0["EX-1: Handle expense"]')
+    expect(graph).toContain('branch_0_end["ROUTE:\nend"]')
+    expect(graph).toContain('branch_0_end --> done')
+    expect(graph).not.toContain('\n  step_0 --> done\n')
+  })
+
   it('shows nested branch steps and info for multiple selected branches', async () => {
     const taxFlow = createAsyncFlow(
       'TAX-1',
@@ -173,6 +199,65 @@ describe('renderProcessAsMermaidGraph branch rendering', () => {
     expect(graph).not.toContain('branch_0_0_step_0 --> branch_0_0_step_0_branch_end')
     expect(graph).not.toContain('branch_0_0_step_0_branch_result')
     expect(graph).not.toContain('branch_0_result')
+  })
+
+  it('renders nested static branch graphs from flow metadata', () => {
+    const branchAFlow = createSyncFlow(
+      'A-1',
+      'Handle A',
+      ({ firstBranch }: { firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }) => ({
+        visitedA: firstBranch === 'A',
+      })
+    ).build()
+
+    const branchCFlow = createSyncFlow(
+      'C-1',
+      'Handle C',
+      ({ secondBranch }: { firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }) => ({
+        visitedC: secondBranch === 'C',
+      })
+    ).build()
+
+    const branchDFlow = createSyncFlow(
+      'D-1',
+      'Handle D',
+      ({ secondBranch }: { firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }) => ({
+        visitedD: secondBranch === 'D',
+      })
+    ).build()
+
+    const branchBFlow = createSyncFlow(
+      'B-ROUTE',
+      'Route nested branch',
+      ({ secondBranch }: { firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }) => secondBranch,
+      {
+        C: branchCFlow,
+        D: branchDFlow,
+      }
+    ).build()
+
+    const flow = createSyncFlow(
+      'ROOT-ROUTE',
+      'Route root branch',
+      ({ firstBranch }: { firstBranch: 'A' | 'B'; secondBranch: 'C' | 'D' }) => firstBranch,
+      {
+        A: branchAFlow,
+        B: branchBFlow,
+      }
+    ).build()
+
+    const graph = renderProcessAsMermaidGraph(flow)
+
+    expect(graph).toContain('step_0["ROOT-ROUTE: Route root branch\nbranches: A, B"]')
+    expect(graph).toContain('branch_0_1_start["Branch: B"]')
+    expect(graph).toContain('branch_0_1_step_0["B-ROUTE: Route nested branch\nbranches: C, D"]')
+    expect(graph).toContain('branch_0_1_step_0_branch_0_start["Branch: C"]')
+    expect(graph).toContain('branch_0_1_step_0_branch_0_step_0["C-1: Handle C"]')
+    expect(graph).toContain('branch_0_1_step_0_branch_1_start["Branch: D"]')
+    expect(graph).toContain('branch_0_1_step_0_branch_1_step_0["D-1: Handle D"]')
+    expect(graph).toContain('branch_0_1_step_0_branch_end["B-ROUTE:\nend"]')
+    expect(graph).toContain('branch_0_end["ROOT-ROUTE:\nend"]')
+    expect(graph).not.toContain('\n  step_0 --> done\n')
   })
 
   it('renders structured step definitions without JSON syntax that breaks Mermaid parsing', () => {

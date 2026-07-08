@@ -248,8 +248,8 @@ export async function writeStructuredProcessExampleMarkdown(
     templateFile,
     documentationSourceFile,
     outputFile,
-    logMarkers: true,
-    generatedExamples: [
+    printReport: true,
+    flows: [
       {
         id: 'SEQUENCE',
         flow: sequence,

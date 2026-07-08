@@ -44,9 +44,11 @@ type SubmittedForm = { id: string }
 type Occupancy = { id: string }
 
 function getOccupancies(_ctx: { form: SubmittedForm }) {
-  return {
-    occupancies: [] as Occupancy[],
-  }
+  return stepResult({
+    ctx: {
+      occupancies: [] as Occupancy[],
+    },
+  })
 }
 
 function verifyOccupancyCount(_ctx: { form: SubmittedForm; occupancies: Occupancy[] }) {
@@ -139,6 +141,7 @@ The table below shows how each recorded `result` affects execution and ctx updat
 This example uses an object-valued `StepDescription` for both `step()` and `branch()`. The generated JSON below shows
 the stored flow definition.
 
+<a id="structured-step-description-code-block"></a>
 ```ts
 type StepMeta = {
   label: string
@@ -149,25 +152,34 @@ type StepMeta = {
 const autoReviewFlow = createSyncFlow(
   'AUTO-1',
   { label: 'Auto approve', area: 'risk', severity: 'low' },
-  ({ amount, normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
-    autoApproved: normalizedAmount <= Math.abs(amount),
-  })
+  ({ amount, normalizedAmount }: { amount: number; normalizedAmount: number }) =>
+    stepResult({
+      ctx: {
+        autoApproved: normalizedAmount <= Math.abs(amount),
+      },
+    })
 )
 
 const manualReviewFlow = createSyncFlow(
   'MANUAL-1',
   { label: 'Manual review', area: 'risk', severity: 'high' },
-  ({ normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
-    queuedForReview: normalizedAmount > 1000,
-  })
+  ({ normalizedAmount }: { amount: number; normalizedAmount: number }) =>
+    stepResult({
+      ctx: {
+        queuedForReview: normalizedAmount > 1000,
+      },
+    })
 )
 
 const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
   'VALIDATE',
   { label: 'Validate amount', area: 'billing', severity: 'high' },
-  ({ amount }) => ({
-    normalizedAmount: Math.abs(amount),
-  })
+  ({ amount }) =>
+    stepResult({
+      ctx: {
+        normalizedAmount: Math.abs(amount),
+      },
+    })
 )
   .branch(
     'ROUTE',
@@ -183,6 +195,7 @@ const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
 
 <p><strong>Internal flow configuration JSON</strong></p>
 
+<a id="structured-step-description-flow-json"></a>
 <!-- structured-process-demo:structured-step-description-flow-json:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
@@ -197,8 +210,8 @@ const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
       &quot;fn&quot;: {
         &quot;kind&quot;: &quot;arrow-function&quot;,
         &quot;async&quot;: false,
-        &quot;params&quot;: &quot;({amount})&quot;,
-        &quot;bodyPreview&quot;: &quot;({normalizedAmount:Math.abs(amount)})&quot;
+        &quot;params&quot;: &quot;({ amount })&quot;,
+        &quot;bodyPreview&quot;: &quot;stepResult({ ctx: { normalizedAmount: Math.abs(amount) } })&quot;
       }
     },
     {
@@ -208,11 +221,51 @@ const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
         &quot;area&quot;: &quot;risk&quot;,
         &quot;severity&quot;: &quot;low&quot;
       },
+      &quot;branches&quot;: {
+        &quot;auto&quot;: {
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;AUTO-1&quot;,
+              &quot;description&quot;: {
+                &quot;label&quot;: &quot;Auto approve&quot;,
+                &quot;area&quot;: &quot;risk&quot;,
+                &quot;severity&quot;: &quot;low&quot;
+              },
+              &quot;fn&quot;: {
+                &quot;kind&quot;: &quot;arrow-function&quot;,
+                &quot;async&quot;: false,
+                &quot;params&quot;: &quot;({ amount, normalizedAmount })&quot;,
+                &quot;bodyPreview&quot;: &quot;stepResult({ ctx: { autoApproved: normalizedAmount &lt;= Math.abs(amount) } })&quot;
+              }
+            }
+          ],
+          &quot;mode&quot;: &quot;sync&quot;
+        },
+        &quot;manual&quot;: {
+          &quot;steps&quot;: [
+            {
+              &quot;id&quot;: &quot;MANUAL-1&quot;,
+              &quot;description&quot;: {
+                &quot;label&quot;: &quot;Manual review&quot;,
+                &quot;area&quot;: &quot;risk&quot;,
+                &quot;severity&quot;: &quot;high&quot;
+              },
+              &quot;fn&quot;: {
+                &quot;kind&quot;: &quot;arrow-function&quot;,
+                &quot;async&quot;: false,
+                &quot;params&quot;: &quot;({ normalizedAmount })&quot;,
+                &quot;bodyPreview&quot;: &quot;stepResult({ ctx: { queuedForReview: normalizedAmount &gt; 1000 } })&quot;
+              }
+            }
+          ],
+          &quot;mode&quot;: &quot;sync&quot;
+        }
+      },
       &quot;fn&quot;: {
         &quot;kind&quot;: &quot;arrow-function&quot;,
         &quot;async&quot;: false,
-        &quot;params&quot;: &quot;ctx&quot;,
-        &quot;bodyPreview&quot;: &quot;branch.run(ctx)&quot;
+        &quot;params&quot;: &quot;(ctx)&quot;,
+        &quot;bodyPreview&quot;: &quot;runBranchSync(id, ctx, selectBranches, normalizedBranches)&quot;
       }
     }
   ],
@@ -221,6 +274,7 @@ const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
 </pre>
 <!-- structured-process-demo:structured-step-description-flow-json:json:end -->
 
+<a id="structured-step-description-demo-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
@@ -407,17 +461,20 @@ end"]
 
 This is the source flow used by the graph and run examples below.
 
+<a id="sequence-code-block"></a>
 ```ts
 type SubmittedForm = { id: string }
 type Occupancy = { id: string }
 
-function getOccupancies({ form }: { form: SubmittedForm }) {
-  return {
-    occupancies: form.id === '123' ? [{ id: 'a' + form.id }] : [{ id: 'a' + form.id }, { id: 'b' + form.id }],
-  }
+async function getOccupancies({ form }: { form: SubmittedForm }) {
+  return stepResult({
+    ctx: {
+      occupancies: form.id === '123' ? [{ id: 'a' + form.id }] : [{ id: 'a' + form.id }, { id: 'b' + form.id }],
+    },
+  })
 }
 
-function verifyOccupancyCount({ form, occupancies }: { form: SubmittedForm; occupancies: Occupancy[] }) {
+async function verifyOccupancyCount({ form, occupancies }: { form: SubmittedForm; occupancies: Occupancy[] }) {
   if (form.id === '300') {
     return stepResult({
       result: 'stop',
@@ -448,6 +505,9 @@ async function crossCheckFormAndOccupancies({ form }: { form: SubmittedForm; occ
       form.id === '123'
         ? 'The submitted form is acceptable, but the occupancy trail is still incomplete.'
         : 'The submitted form and occupancy trail tell a consistent story.',
+    ctx: {
+      crossChecked: form.id !== '400',
+    },
   })
 }
 
@@ -461,6 +521,7 @@ const sequence = createAsyncFlow('IC10', 'Get linked occupancy records', getOccu
 
 This is the same flow before execution.
 
+<a id="sequence-static-graph"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>No run result yet.</p></div><div><div>
 
 <!-- structured-process-demo:sequence-static-graph:mermaid:start -->
@@ -484,14 +545,22 @@ flowchart TD
 ```
 <!-- structured-process-demo:sequence-static-graph:mermaid:end -->
 
-</div></div><div><!-- structured-process-demo:sequence-static-graph:html-table:start -->
-<table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th></tr></thead><tbody><tr><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC10</td><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Get linked occupancy records</td></tr><tr><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC25</td><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Count the recovered occupancy trail and insist on exactly two records</td></tr><tr><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC30</td><td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Cross-check the submitted form against the recovered occupancy trail</td></tr></tbody></table>
-<!-- structured-process-demo:sequence-static-graph:html-table:end --></div></div>
+</div></div><div><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>IC10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">IC10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Get linked occupancy records</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>IC25</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">IC25</div><div style="margin-top:4px;color:#334155;font-size:13px;">Count the recovered occupancy trail and insist on exactly two records</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>IC30</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">IC30</div><div style="margin-top:4px;color:#334155;font-size:13px;">Cross-check the submitted form against the recovered occupancy trail</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table></div></div>
 
 ### Passing Demo
 
 Happy path: every step runs and the flow ends with `ok`.
 
+<a id="sequence-passing-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
@@ -534,7 +603,10 @@ Happy path: every step runs and the flow ends with `ok`.
     {
       &quot;id&quot;: &quot;IC30&quot;,
       &quot;result&quot;: &quot;ok&quot;,
-      &quot;info&quot;: &quot;The submitted form and occupancy trail tell a consistent story.&quot;
+      &quot;info&quot;: &quot;The submitted form and occupancy trail tell a consistent story.&quot;,
+      &quot;addToCtx&quot;: {
+        &quot;crossChecked&quot;: true
+      }
     }
   ],
   &quot;finalCtx&quot;: {
@@ -548,7 +620,8 @@ Happy path: every step runs and the flow ends with `ok`.
       {
         &quot;id&quot;: &quot;b200&quot;
       }
-    ]
+    ],
+    &quot;crossChecked&quot;: true
   }
 }</code>
 </pre>
@@ -610,7 +683,7 @@ The submitted form and occupancy trail tell a consistent story."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Cross-check the submitted form against the recovered occupancy trail</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">The submitted form and occupancy trail tell a consistent story.</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;crossChecked&quot;:true}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
@@ -620,6 +693,7 @@ The submitted form and occupancy trail tell a consistent story."]
 
 A step returns `error`. Execution continues, but the overall result is failed.
 
+<a id="sequence-failing-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
@@ -661,7 +735,10 @@ A step returns `error`. Execution continues, but the overall result is failed.
     {
       &quot;id&quot;: &quot;IC30&quot;,
       &quot;result&quot;: &quot;ok&quot;,
-      &quot;info&quot;: &quot;The submitted form is acceptable, but the occupancy trail is still incomplete.&quot;
+      &quot;info&quot;: &quot;The submitted form is acceptable, but the occupancy trail is still incomplete.&quot;,
+      &quot;addToCtx&quot;: {
+        &quot;crossChecked&quot;: true
+      }
     }
   ],
   &quot;finalCtx&quot;: {
@@ -672,7 +749,8 @@ A step returns `error`. Execution continues, but the overall result is failed.
       {
         &quot;id&quot;: &quot;a123&quot;
       }
-    ]
+    ],
+    &quot;crossChecked&quot;: true
   }
 }</code>
 </pre>
@@ -734,7 +812,7 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Cross-check the submitted form against the recovered occupancy trail</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">The submitted form is acceptable, but the occupancy trail is still incomplete.</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;crossChecked&quot;:true}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
 </table>
@@ -744,6 +822,7 @@ The submitted form is acceptable, but the occupancy trail is still incomplete."]
 
 A step returns `stop`, so later steps are recorded as `skip`.
 
+<a id="sequence-stop-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
@@ -870,6 +949,7 @@ The first two records are enough here, so the sequence can finish early."]
 
 An exception ends the flow immediately and marks the rest as `skip`.
 
+<a id="sequence-exception-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
@@ -1000,20 +1080,33 @@ A contradictory record was discovered, so the sequence stops immediately."]
 
 Selector returns one branch key.
 
+<a id="branch-one-of-three-code-block"></a>
 ```ts
 type PostingKind = 'income' | 'expense' | 'transfer'
 
-const incomeFlow = createSyncFlow('IN-1', 'Handle income', ({ amount }: { amount: number; kind: PostingKind }) => ({
-  normalizedAmount: amount,
-}))
+const incomeFlow = createSyncFlow('IN-1', 'Handle income', ({ amount }: { amount: number; kind: PostingKind }) =>
+  stepResult({
+    ctx: {
+      normalizedAmount: amount,
+    },
+  })
+)
 
-const expenseFlow = createSyncFlow('EX-1', 'Handle expense', ({ amount }: { amount: number; kind: PostingKind }) => ({
-  normalizedAmount: -amount,
-}))
+const expenseFlow = createSyncFlow('EX-1', 'Handle expense', ({ amount }: { amount: number; kind: PostingKind }) =>
+  stepResult({
+    ctx: {
+      normalizedAmount: -amount,
+    },
+  })
+)
 
-const transferFlow = createSyncFlow('TR-1', 'Handle transfer', ({ kind }: { amount: number; kind: PostingKind }) => ({
-  transferSeen: kind === 'transfer',
-}))
+const transferFlow = createSyncFlow('TR-1', 'Handle transfer', ({ kind }: { amount: number; kind: PostingKind }) =>
+  stepResult({
+    ctx: {
+      transferSeen: kind === 'transfer',
+    },
+  })
+)
 
 const oneOfThreeBranchFlow = createSyncFlow(
   'ROUTE',
@@ -1027,6 +1120,7 @@ const oneOfThreeBranchFlow = createSyncFlow(
 ).build()
 ```
 
+<a id="branch-one-of-three-demo-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
@@ -1224,15 +1318,19 @@ end"]
 
 Selector returns multiple branch keys.
 
+<a id="branch-two-of-three-code-block"></a>
 ```ts
 type CheckName = 'tax' | 'fraud' | 'policy'
 
 const taxFlow = createAsyncFlow(
   'TAX-1',
   'Check taxes',
-  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
-    taxChecked: checks.includes('tax'),
-  })
+  async ({ checks }: { amount: number; checks: CheckName[] }) =>
+    stepResult({
+      ctx: {
+        taxChecked: checks.includes('tax'),
+      },
+    })
 )
 
 const fraudFlow = createAsyncFlow(
@@ -1248,9 +1346,12 @@ const fraudFlow = createAsyncFlow(
 const policyFlow = createAsyncFlow(
   'POLICY-1',
   'Check policy',
-  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
-    policyChecked: checks.includes('policy'),
-  })
+  async ({ checks }: { amount: number; checks: CheckName[] }) =>
+    stepResult({
+      ctx: {
+        policyChecked: checks.includes('policy'),
+      },
+    })
 )
 
 const twoOfThreeBranchFlow = createAsyncFlow(
@@ -1265,6 +1366,7 @@ const twoOfThreeBranchFlow = createAsyncFlow(
 ).build()
 ```
 
+<a id="branch-two-of-three-demo-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
@@ -1481,6 +1583,7 @@ Fraud review failed."]
 
 A branch can route into another branch flow.
 
+<a id="nested-branch-code-block"></a>
 ```ts
 type FirstBranch = 'A' | 'B'
 type SecondBranch = 'C' | 'D'
@@ -1488,25 +1591,34 @@ type SecondBranch = 'C' | 'D'
 const branchAFlow = createSyncFlow(
   'A-1',
   'Handle A',
-  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
-    visitedA: firstBranch === 'A',
-  })
+  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) =>
+    stepResult({
+      ctx: {
+        visitedA: firstBranch === 'A',
+      },
+    })
 )
 
 const branchCFlow = createSyncFlow(
   'C-1',
   'Handle C',
-  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
-    visitedC: secondBranch === 'C',
-  })
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) =>
+    stepResult({
+      ctx: {
+        visitedC: secondBranch === 'C',
+      },
+    })
 )
 
 const branchDFlow = createSyncFlow(
   'D-1',
   'Handle D',
-  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
-    visitedD: secondBranch === 'D',
-  })
+  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) =>
+    stepResult({
+      ctx: {
+        visitedD: secondBranch === 'D',
+      },
+    })
 )
 
 const branchBFlow = createSyncFlow(
@@ -1530,6 +1642,7 @@ const nestedBranchFlow = createSyncFlow(
 ).build()
 ```
 
+<a id="nested-branch-demo-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>
@@ -1770,18 +1883,31 @@ end"]
 
 Selector returns 'skip' status instead of branch keys.
 
+<a id="branch-skip-code-block"></a>
 ```ts
-const approveFlow = createSyncFlow('APP-1', 'Approve', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
-  approved: !shouldRunChecks,
-}))
+const approveFlow = createSyncFlow('APP-1', 'Approve', ({ shouldRunChecks }: { shouldRunChecks: boolean }) =>
+  stepResult({
+    ctx: {
+      approved: !shouldRunChecks,
+    },
+  })
+)
 
-const rejectFlow = createSyncFlow('REJ-1', 'Reject', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
-  rejected: !shouldRunChecks,
-}))
+const rejectFlow = createSyncFlow('REJ-1', 'Reject', ({ shouldRunChecks }: { shouldRunChecks: boolean }) =>
+  stepResult({
+    ctx: {
+      rejected: !shouldRunChecks,
+    },
+  })
+)
 
-const reviewFlow = createSyncFlow('REV-1', 'Review', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
-  reviewed: shouldRunChecks,
-}))
+const reviewFlow = createSyncFlow('REV-1', 'Review', ({ shouldRunChecks }: { shouldRunChecks: boolean }) =>
+  stepResult({
+    ctx: {
+      reviewed: shouldRunChecks,
+    },
+  })
+)
 
 const skippedBranchFlow = createSyncFlow(
   'OPTIONAL-CHECKS',
@@ -1795,6 +1921,7 @@ const skippedBranchFlow = createSyncFlow(
 ).build()
 ```
 
+<a id="branch-skip-demo-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial JSON parameter</strong></p>

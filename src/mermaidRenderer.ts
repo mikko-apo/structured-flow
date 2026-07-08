@@ -43,6 +43,7 @@ function renderStepLabel(step: FlowStepDefinition<unknown>, stepResult?: FlowSte
   const branchKeys = stepResult?.branches
     ?.filter((branch) => branch.result !== 'skip')
     .map((branch) => String(branch.key))
+  const staticBranchKeys = Object.keys(step.branches ?? {})
   const description = formatMermaidValue(step.description)
 
   if (stepResult != null && branchKeys != null && branchKeys.length > 0) {
@@ -53,6 +54,10 @@ function renderStepLabel(step: FlowStepDefinition<unknown>, stepResult?: FlowSte
 
   if (stepResult?.branches != null) {
     return `${step.id}: ${description}\n[${stepResult.result}]${stepResult.info == null ? '' : `\n${String(stepResult.info)}`}`
+  }
+
+  if (stepResult == null && staticBranchKeys.length > 0) {
+    return `${step.id}: ${description}\nbranches: ${staticBranchKeys.join(', ')}`
   }
 
   if (stepResult == null) {
@@ -123,6 +128,55 @@ function renderBranchGraphLines(
   return lines
 }
 
+function renderStaticBranchGraphLines(
+  parentNodeId: string,
+  nextNodeId: string | undefined,
+  step: FlowStepDefinition<unknown>,
+  branchPrefix: string
+): string[] {
+  const branches = Object.entries(step.branches ?? {})
+
+  if (branches.length === 0) {
+    return nextNodeId == null ? [] : [`  ${parentNodeId} --> ${nextNodeId}`]
+  }
+
+  const lines: string[] = []
+  const branchEndNodeId = nextNodeId == null ? undefined : `${branchPrefix}_end`
+
+  if (branchEndNodeId != null) {
+    lines.push(`  ${branchEndNodeId}["${escapeMermaidLabel(`${step.id}:\nend`)}"]`)
+    lines.push(`  ${branchEndNodeId} --> ${nextNodeId}`)
+    lines.push(`  class ${branchEndNodeId} join`)
+  }
+
+  for (const [branchIndex, [branchKey, branchFlow]] of branches.entries()) {
+    const branchNodePrefix = `${branchPrefix}_${branchIndex}`
+    const branchStartNodeId = `${branchNodePrefix}_start`
+
+    lines.push(`  ${branchStartNodeId}["${escapeMermaidLabel(`Branch: ${String(branchKey)}`)}"]`)
+    lines.push(`  ${parentNodeId} --> ${branchStartNodeId}`)
+    lines.push(`  class ${branchStartNodeId} executed`)
+
+    if (branchFlow.steps.length > 0) {
+      for (const [childStepIndex, childStep] of branchFlow.steps.entries()) {
+        const childNodeId = `${branchNodePrefix}_step_${childStepIndex}`
+        const childLabel = renderStepLabel(childStep)
+        const previousNodeId = childStepIndex === 0 ? branchStartNodeId : `${branchNodePrefix}_step_${childStepIndex - 1}`
+        const targetNodeId =
+          childStepIndex === branchFlow.steps.length - 1 ? branchEndNodeId : `${branchNodePrefix}_step_${childStepIndex + 1}`
+
+        lines.push(`  ${childNodeId}["${escapeMermaidLabel(childLabel)}"]`)
+        lines.push(`  ${previousNodeId} --> ${childNodeId}`)
+        lines.push(...renderStaticBranchGraphLines(childNodeId, targetNodeId, childStep, `${childNodeId}_branch`))
+      }
+    } else if (branchEndNodeId != null) {
+      lines.push(`  ${branchStartNodeId} --> ${branchEndNodeId}`)
+    }
+  }
+
+  return lines
+}
+
 export function renderProcessAsMermaidGraph(value: MermaidRenderable): string {
   const steps = value.steps as readonly FlowStepDefinition<unknown>[]
   const sequenceResult = hasStepResults(value) ? value : undefined
@@ -171,7 +225,7 @@ export function renderProcessAsMermaidGraph(value: MermaidRenderable): string {
     lines.push(`  ${nodeId}["${escapeMermaidLabel(label)}"]`)
 
     if (stepResult == null) {
-      lines.push(`  ${nodeId} --> ${nextNodeId}`)
+      lines.push(...renderStaticBranchGraphLines(nodeId, nextNodeId, step, `branch_${index}`))
     } else {
       lines.push(...renderBranchGraphLines(nodeId, nextNodeId, stepResult, `branch_${index}`))
     }
