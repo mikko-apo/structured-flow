@@ -1,494 +1,278 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 
-import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
+import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
+import { createAsyncFlow, createSyncFlow, StepResult, stepResult } from '../structuredFlow'
+
+type PersonCtx = {
+  person: {
+    id: string
+    name: string
+    age: number
+  }
+  route: 'approve' | 'reject'
+  checks: Array<'audit' | 'rules'>
+}
+
+type StepId = {
+  id: string
+  description: string
+  fn?: (ctx: PersonCtx) => Record<string, unknown> | Promise<Record<string, unknown>>
+}
+
+function createSyncBuilder() {
+  return createSyncFlow<PersonCtx, StepId>({
+    resolver: (step) => ({
+      id: step.id,
+      description: step.description,
+      stepFn: step.fn,
+    }),
+  })
+}
+
+function createAsyncBuilder() {
+  return createAsyncFlow<PersonCtx, StepId>({
+    resolver: (step) => ({
+      id: step.id,
+      description: step.description,
+      stepFn: step.fn,
+    }),
+  })
+}
 
 describe('structuredFlow core execution', () => {
-  it('accumulates ctx from successful sync steps', () => {
-    const flow = createSyncFlow<string, string>('S1', 'Add tax', ({ amount }: { amount: number }) => ({
-      taxedAmount: amount * 1.24,
-    }))
-      .step('S2', 'Finalize total', ({ taxedAmount }) =>
-        stepResult({
-          info: 'Total finalized.',
-          finalAmount: Math.round(taxedAmount * 100) / 100,
-        })
+  it('uses resolver-provided step functions and keeps ctx stable', () => {
+    const ageCheck: StepId = {
+      id: 'AGE-1',
+      description: 'Check age',
+      fn: ({ person }) => ({
+        eligible: person.age >= 18,
+      }),
+    }
+
+    const normalizeName: StepId = {
+      id: 'NAME-1',
+      description: 'Normalize name',
+    }
+
+    const flow = createSyncBuilder()
+      .step(ageCheck)
+      .step(
+        normalizeName,
+        ({ person }) =>
+          stepResult({
+            normalizedName: person.name.trim().toUpperCase(),
+            info: 'Normalized with a custom fn override.',
+          }),
+        { description: 'Normalize person name' }
       )
       .build()
 
-    const result = flow.run({ amount: 10 })
-
-    expect(result.ok).toBe(true)
-    expect(result.finalCtx).toEqual({
-      amount: 10,
-      taxedAmount: 12.4,
-      finalAmount: 12.4,
+    const result = flow.run({
+      person: { id: 'p1', name: ' Ada ', age: 31 },
+      route: 'approve',
+      checks: ['audit'],
     })
-    expect(result.stepResults).toEqual([
-      { id: 'S1', result: 'ok', addToCtx: { taxedAmount: 12.4 } },
-      { id: 'S2', result: 'ok', info: 'Total finalized.', addToCtx: { finalAmount: 12.4 } },
-    ])
-  })
-
-  it('continues after error and marks the flow as failed', () => {
-    const flow = createSyncFlow<string, string>('S1', 'Validate amount', ({ amount }: { amount: number }) =>
-      stepResult({
-        result: 'error',
-        info: `Amount ${amount} failed validation.`,
-      })
-    )
-      .step('S2', 'Still runs', () => ({
-        afterError: true,
-      }))
-      .build()
-
-    const result = flow.run({ amount: 10 })
-
-    expect(result.ok).toBe(false)
-    expect(result.failedStepIds()).toEqual(['S1'])
-    expect(result.finalCtx).toEqual({
-      amount: 10,
-      afterError: true,
-    })
-    expect(result.stepResults).toEqual([
-      { id: 'S1', result: 'error', info: 'Amount 10 failed validation.' },
-      { id: 'S2', result: 'ok', addToCtx: { afterError: true } },
-    ])
-  })
-
-  it('continues after explicit skip without merging returned fields into ctx', () => {
-    const flow = createSyncFlow('S1', 'Optionally skip', ({ amount }: { amount: number }) =>
-      stepResult({
-        result: 'skip',
-        info: `Skipped amount ${amount}.`,
-      })
-    )
-      .step('S2', 'Still runs after skip', ({ amount }) => ({
-        continued: amount > 0,
-      }))
-      .build()
-
-    const result = flow.run({ amount: 10 })
-
-    expect(result.ok).toBe(true)
-    expect(result.finalCtx).toEqual({
-      amount: 10,
-      continued: true,
-    })
-    expect(result.stepResults).toEqual([
-      { id: 'S1', result: 'skip', info: 'Skipped amount 10.' },
-      { id: 'S2', result: 'ok', addToCtx: { continued: true } },
-    ])
-  })
-
-  it('stops early and records remaining steps as skip', () => {
-    const flow = createSyncFlow<string, string>('S1', 'Stop early', ({ amount }: { amount: number }) =>
-      stepResult({
-        result: 'stop',
-        info: 'Enough information collected.',
-        stoppedAmount: amount,
-      })
-    )
-      .step('S2', 'Skipped', () => ({
-        unreachable: true,
-      }))
-      .build()
-
-    const result = flow.run({ amount: 10 })
-
-    expect(result.ok).toBe(true)
-    expect(result.finalCtx).toEqual({
-      amount: 10,
-      stoppedAmount: 10,
-    })
-    expect(result.stepResults).toEqual([
-      { id: 'S1', result: 'stop', info: 'Enough information collected.', addToCtx: { stoppedAmount: 10 } },
-      { id: 'S2', result: 'skip' },
-    ])
-  })
-
-  it('keeps ok-path ctx available to later steps when the previous step may also stop', async () => {
-    const flow = createAsyncFlow<string, string>('A1', 'Load person', async ({ found }: { found: boolean }) => {
-      if (!found) {
-        return stepResult({
-          result: 'stop',
-          info: 'Person was not found.',
-        })
-      }
-
-      return stepResult({
-        person: { id: 'person-1' },
-      })
-    })
-      .step('A2', 'Use person', async ({ person }) => ({
-        personId: person.id,
-      }))
-      .build()
-
-    const stopResult = await flow.run({ found: false })
-    const okResult = await flow.run({ found: true })
-
-    expect(stopResult.ok).toBe(true)
-    expect(stopResult.finalCtx).toEqual({ found: false })
-    expect(stopResult.stepResults).toEqual([
-      { id: 'A1', result: 'stop', info: 'Person was not found.' },
-      { id: 'A2', result: 'skip' },
-    ])
-
-    expect(okResult.ok).toBe(true)
-    expect(okResult.finalCtx).toEqual({
-      found: true,
-      person: { id: 'person-1' },
-      personId: 'person-1',
-    })
-    expect(okResult.stepResults).toEqual([
-      { id: 'A1', result: 'ok', addToCtx: { person: { id: 'person-1' } } },
-      { id: 'A2', result: 'ok', addToCtx: { personId: 'person-1' } },
-    ])
-  })
-
-  it('converts thrown exceptions into exception results and skips the rest', () => {
-    const flow = createSyncFlow('S1', 'Throw', ({ amount }: { amount: number }) => {
-      if (amount >= 0) {
-        throw new Error('boom')
-      }
-
-      return { unreachable: true }
-    })
-      .step('S2', 'Skipped after exception', () => ({
-        unreachable: true,
-      }))
-      .build()
-
-    const result = flow.run({ amount: 10 })
-
-    expect(result.ok).toBe(false)
-    expect(result.failedStepIds()).toEqual(['S1'])
-    expect(result.finalCtx).toEqual({ amount: 10 })
-    expect(result.stepResults).toEqual([
-      { id: 'S1', result: 'exception' },
-      { id: 'S2', result: 'skip' },
-    ])
-  })
-
-  it('rejects ctx overwrites from later steps', () => {
-    const flow = createSyncFlow('S1', 'Add total', ({ amount }: { amount: number }) => ({
-      total: amount,
-    }))
-      .step('S2', 'Try overwrite total', () => ({
-        total: 20,
-      }))
-      .build()
-
-    const result = flow.run({ amount: 10 })
-
-    expect(result.ok).toBe(false)
-    expect(result.stepResults).toEqual([
-      { id: 'S1', result: 'ok', addToCtx: { total: 10 } },
-      { id: 'S2', result: 'exception' },
-    ])
-    expect(result.finalCtx).toEqual({
-      amount: 10,
-      total: 10,
-    })
-  })
-
-  it('rejects promises returned from sync flows', () => {
-    const flow = createSyncFlow<{ amount: number }>()
-      .step('S1', 'Invalid async in sync flow', (({ amount }: { amount: number }) =>
-        Promise.resolve({ later: amount > 0 })) as never)
-      .step('S2', 'Skipped', () => ({
-        unreachable: true,
-      }))
-      .build()
-
-    const result = flow.run({ amount: 10 })
-
-    expect(result.ok).toBe(false)
-    expect(result.stepResults).toEqual([
-      { id: 'S1', result: 'exception' },
-      { id: 'S2', result: 'skip' },
-    ])
-  })
-
-  it('awaits async steps and preserves async execution semantics', async () => {
-    const flow = createAsyncFlow<string, string>('A1', 'Load multiplier', async ({ amount }: { amount: number }) => ({
-      multiplier: amount > 5 ? 3 : 2,
-    }))
-      .step('A2', 'Compute total', async ({ amount, multiplier }) =>
-        stepResult({
-          info: 'Computed asynchronously.',
-          total: amount * multiplier,
-        })
-      )
-      .build()
-
-    const result = await flow.run({ amount: 7 })
-
-    expect(result.ok).toBe(true)
-    expect(result.finalCtx).toEqual({
-      amount: 7,
-      multiplier: 3,
-      total: 21,
-    })
-    expect(result.stepResults).toEqual([
-      { id: 'A1', result: 'ok', addToCtx: { multiplier: 3 } },
-      { id: 'A2', result: 'ok', info: 'Computed asynchronously.', addToCtx: { total: 21 } },
-    ])
-  })
-
-  it('supports createSyncFlow(id, description, fn) without explicit type signatures', () => {
-    const flow = createSyncFlow('S1', 'Normalize amount', ({ amount }: { amount: number }) => ({
-      normalizedAmount: Math.abs(amount),
-    }))
-      .step('S2', 'Classify amount', ({ normalizedAmount }) => ({
-        isLarge: normalizedAmount >= 100,
-      }))
-      .build()
-
-    const result = flow.run({ amount: -120 })
-
-    expect(result.ok).toBe(true)
-    expect(flow.steps).toMatchObject([
-      { id: 'S1', description: 'Normalize amount' },
-      { id: 'S2', description: 'Classify amount' },
-    ])
-    expect(result.finalCtx).toEqual({
-      amount: -120,
-      normalizedAmount: 120,
-      isLarge: true,
-    })
-  })
-
-  it('supports createAsyncFlow(id, description, fn) without explicit type signatures', async () => {
-    const flow = createAsyncFlow('A1', 'Load score', async ({ amount }: { amount: number }) => ({
-      score: amount * 2,
-    }))
-      .step('A2', 'Approve score', async ({ score }) =>
-        stepResult({
-          info: 'Approved asynchronously.',
-          approved: score > 10,
-        })
-      )
-      .build()
-
-    const result = await flow.run({ amount: 7 })
-
-    expect(result.ok).toBe(true)
-    expect(flow.steps).toMatchObject([
-      { id: 'A1', description: 'Load score' },
-      { id: 'A2', description: 'Approve score' },
-    ])
-    expect(result.finalCtx).toEqual({
-      amount: 7,
-      score: 14,
-      approved: true,
-    })
-  })
-
-  it('supports createSyncFlow/createAsyncFlow with custom step definitions and InitialCtx in the new generic order', async () => {
-    const syncFlow = createSyncFlow<{ label: string }, { amount: number }, unknown>()
-      .step('S1', { label: 'Add tax' }, ({ amount }) => ({
-        taxedAmount: amount * 1.24,
-      }))
-      .build()
-
-    const asyncFlow = createAsyncFlow<{ label: string }, { amount: number }, string>()
-      .step('A1', { label: 'Finalize total' }, async ({ amount }) =>
-        stepResult({
-          info: 'Done.',
-          finalAmount: amount + 1,
-        })
-      )
-      .build()
-
-    expect(syncFlow.steps).toMatchObject([{ id: 'S1', description: { label: 'Add tax' } }])
-    expect(syncFlow.run({ amount: 10 }).finalCtx).toEqual({ amount: 10, taxedAmount: 12.4 })
-    expect(asyncFlow.steps).toMatchObject([{ id: 'A1', description: { label: 'Finalize total' } }])
-    await expect(asyncFlow.run({ amount: 10 })).resolves.toMatchObject({
-      ok: true,
-      stepResults: [{ id: 'A1', result: 'ok', info: 'Done.', addToCtx: { finalAmount: 11 } }],
-      finalCtx: { amount: 10, finalAmount: 11 },
-    })
-  })
-
-  it('supports createSyncFlow<StepDescription, Info>(id, description, fn) as the first step', () => {
-    type StepMeta = { label: string }
-    type InfoMeta = { reason: string }
-
-    const flow = createSyncFlow<StepMeta, InfoMeta>('S1', { label: 'Add tax' }, ({ amount }: { amount: number }) =>
-      stepResult({
-        info: { reason: 'applied default rate' },
-        taxedAmount: amount * 1.24,
-      })
-    )
-      .step('S2', { label: 'Finalize total' }, ({ taxedAmount }) => ({
-        finalAmount: Math.round(taxedAmount * 100) / 100,
-      }))
-      .build()
-
-    const result = flow.run({ amount: 10 })
 
     expect(flow.steps).toMatchObject([
-      { id: 'S1', description: { label: 'Add tax' } },
-      { id: 'S2', description: { label: 'Finalize total' } },
+      { id: 'AGE-1', options: { description: 'Check age' } },
+      { id: 'NAME-1', options: { description: 'Normalize person name' } },
     ])
-    expect(result.stepResults).toEqual([
-      { id: 'S1', result: 'ok', info: { reason: 'applied default rate' }, addToCtx: { taxedAmount: 12.4 } },
-      { id: 'S2', result: 'ok', addToCtx: { finalAmount: 12.4 } },
-    ])
-    expect(result.finalCtx).toEqual({ amount: 10, taxedAmount: 12.4, finalAmount: 12.4 })
-  })
-
-  it('supports createAsyncFlow<StepDescription, Info>(id, description, fn) as the first step', async () => {
-    type StepMeta = { label: string }
-    type InfoMeta = { source: string }
-
-    const flow = createAsyncFlow<StepMeta, InfoMeta>(
-      'A1',
-      { label: 'Load multiplier' },
-      async ({ amount }: { amount: number }) =>
-        stepResult({
-          info: { source: 'remote' },
-          multiplier: amount > 0 ? 3 : 0,
-        })
-    )
-      .step('A2', { label: 'Compute total' }, async ({ amount, multiplier }) => ({
-        total: amount * multiplier,
-      }))
-      .build()
-
-    const result = await flow.run({ amount: 7 })
-
-    expect(flow.steps).toMatchObject([
-      { id: 'A1', description: { label: 'Load multiplier' } },
-      { id: 'A2', description: { label: 'Compute total' } },
-    ])
-    expect(result.stepResults).toEqual([
-      { id: 'A1', result: 'ok', info: { source: 'remote' }, addToCtx: { multiplier: 3 } },
-      { id: 'A2', result: 'ok', addToCtx: { total: 21 } },
-    ])
-    expect(result.finalCtx).toEqual({ amount: 7, multiplier: 3, total: 21 })
-  })
-
-  it('enriches results with step descriptions, including nested branch results', () => {
-    const approvedFlow = createSyncFlow<{ label: string }>(
-      'APP-1',
-      { label: 'Approve request' },
-      ({ amount }: { amount: number; route: 'approved' | 'rejected' }) => ({
-        approvedTotal: amount + 1,
-      })
-    )
-
-    const rejectedFlow = createSyncFlow<{ label: string }>(
-      'REJ-1',
-      { label: 'Reject request' },
-      ({ amount }: { amount: number; route: 'approved' | 'rejected' }) => ({
-        rejectionCode: amount > 0 ? 'manual-review' : 'auto-review',
-      })
-    )
-
-    const flow = createSyncFlow<{ label: string }>(
-      'BR-1',
-      { label: 'Route request' },
-      ({ route }: { amount: number; route: 'approved' | 'rejected' }) => route,
-      {
-        approved: approvedFlow,
-        rejected: rejectedFlow,
-      }
-    )
-      .step('AFTER', { label: 'Continue parent flow' }, () => ({
-        parentCompleted: true,
-      }))
-      .build()
-
-    const result = flow.run({ amount: 4, route: 'approved' })
-    const enrichedResult = result.enrichResult()
-
-    expect(enrichedResult.stepResults).toEqual([
-      {
-        id: 'BR-1',
-        description: { label: 'Route request' },
-        result: 'ok',
-        branches: [
-          {
-            key: 'approved',
-            result: 'ok',
-            finalCtx: {
-              amount: 4,
-              route: 'approved',
-              approvedTotal: 5,
-            },
-            steps: [{ id: 'APP-1', description: { label: 'Approve request' } }],
-            stepResults: [
-              {
-                id: 'APP-1',
-                description: { label: 'Approve request' },
-                result: 'ok',
-                addToCtx: { approvedTotal: 5 },
-              },
-            ],
+    expect(result.status).toBe('ok')
+    expect(result.stepResults[0]).toBeInstanceOf(StepResult)
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'ok',
+      stepResults: [
+        { id: 'AGE-1', description: 'Check age', status: 'ok', result: { eligible: true } },
+        {
+          id: 'NAME-1',
+          description: 'Normalize person name',
+          status: 'ok',
+          result: {
+            normalizedName: 'ADA',
+            info: 'Normalized with a custom fn override.',
           },
-          {
-            key: 'rejected',
-            result: 'skip',
-            finalCtx: {
-              amount: 4,
-              route: 'approved',
-            },
-            steps: [{ id: 'REJ-1', description: { label: 'Reject request' } }],
-            stepResults: [
-              {
-                id: 'REJ-1',
-                description: { label: 'Reject request' },
-                result: 'skip',
-              },
-            ],
-          },
-        ],
-      },
-      {
-        id: 'AFTER',
-        description: { label: 'Continue parent flow' },
-        result: 'ok',
-        addToCtx: { parentCompleted: true },
-      },
-    ])
-    expect(enrichedResult.failedStepIds()).toEqual([])
+        },
+      ],
+    })
   })
 
-  it('collects nested failed ids from enriched results and can prefix branch ids', () => {
-    const flow = createSyncFlow('BR-1', 'Route request', ({ route }: { route: 'approved' | 'rejected' }) => route, {
-      approved: createSyncFlow('APP-1', 'Approve request', () => ({
-        approved: true,
-      })),
-      rejected: createSyncFlow<string, string>('REJ-1', 'Reject request', () =>
+  it('parses status, stores the remaining payload on the step result, and supports result remapping', () => {
+    const rejectMinor: StepId = {
+      id: 'AGE-2',
+      description: 'Reject minors',
+      fn: ({ person }) =>
         stepResult({
-          result: 'error',
-          info: 'Rejected in child flow.',
+          status: person.age >= 18 ? 'ok' : 'error',
+          reason: person.age >= 18 ? 'adult' : 'minor',
+        }),
+    }
+
+    const flow = createSyncBuilder()
+      .step(rejectMinor, { status: { error: 'ignore' } })
+      .step(
+        {
+          id: 'THROW-1',
+          description: 'Convert exception to error',
+          fn: ({ route }) => {
+            if (route === 'reject') {
+              throw new Error('boom')
+            }
+
+            return { reached: true }
+          },
+        },
+        { status: { exception: 'error' } }
+      )
+      .step(
+        {
+          id: 'AFTER-1',
+          description: 'Still runs after remapped exception',
+        },
+        ({ checks }) => ({
+          checksSeen: checks.length,
         })
-      ),
-    }).build()
+      )
+      .build()
 
-    const enrichedResult = flow.run({ route: 'rejected' }).enrichResult()
+    const result = flow.run({
+      person: { id: 'p2', name: 'Max', age: 16 },
+      route: 'reject',
+      checks: ['audit', 'rules'],
+    })
 
-    expect(enrichedResult.failedStepIds()).toEqual(['BR-1', 'REJ-1'])
-    expect(enrichedResult.failedStepIds({ branchPrefix: true })).toEqual(['BR-1', 'BR-1/REJ-1'])
+    expect(result.status).toBe('error')
+    expect(collectFailedStepIds(result.stepResults)).toEqual(['THROW-1'])
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'error',
+      stepResults: [
+        { id: 'AGE-2', status: 'ok', originalStatus: 'error', result: { reason: 'minor' } },
+        { id: 'THROW-1', status: 'error', originalStatus: 'exception' },
+        { id: 'AFTER-1', status: 'ok', result: { checksSeen: 2 } },
+      ],
+    })
   })
 
-  it('supports empty flows and empty enriched results', () => {
-    const flow = createSyncFlow<{ amount: number }>().build()
+  it('stops on stop and skips the remaining steps', () => {
+    const flow = createSyncBuilder()
+      .step({
+        id: 'STOP-1',
+        description: 'Stop rejected requests',
+        fn: ({ route }) =>
+          stepResult({
+            status: route === 'reject' ? 'stop' : 'ok',
+            decision: route,
+          }),
+      })
+      .step(
+        {
+          id: 'AFTER-2',
+          description: 'Skipped after stop',
+        },
+        () => ({
+          unreachable: true,
+        })
+      )
+      .build()
 
-    const result = flow.run({ amount: 10 })
-    const enrichedResult = result.enrichResult()
+    const result = flow.run({
+      person: { id: 'p3', name: 'Nia', age: 23 },
+      route: 'reject',
+      checks: [],
+    })
 
-    expect(result.ok).toBe(true)
-    expect(result.failedStepIds()).toEqual([])
-    expect(result.finalCtx).toEqual({ amount: 10 })
-    expect(result.stepResults).toEqual([])
+    expect(result.status).toBe('stop')
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'stop',
+      stepResults: [
+        { id: 'STOP-1', status: 'stop', result: { decision: 'reject' } },
+        { id: 'AFTER-2', status: 'skip' },
+      ],
+    })
+  })
 
-    expect(enrichedResult.ok).toBe(true)
-    expect(enrichedResult.failedStepIds()).toEqual([])
-    expect(enrichedResult.finalCtx).toEqual({ amount: 10 })
-    expect(enrichedResult.stepResults).toEqual([])
+  it('supports async steps and preserves the same ctx for every step', async () => {
+    const flow = createAsyncBuilder()
+      .step({
+        id: 'ASYNC-1',
+        description: 'Load score',
+        fn: async ({ person }) => ({
+          score: person.age * 2,
+        }),
+      })
+      .step(
+        {
+          id: 'ASYNC-2',
+          description: 'Approve score',
+        },
+        async ({ person, checks }) =>
+          stepResult({
+            approved: person.age >= 18 && checks.includes('audit'),
+          })
+      )
+      .build()
+
+    const result = await flow.run({
+      person: { id: 'p4', name: 'Ivy', age: 27 },
+      route: 'approve',
+      checks: ['audit'],
+    })
+
+    expect(result.status).toBe('ok')
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'ok',
+      stepResults: [
+        { id: 'ASYNC-1', status: 'ok', result: { score: 54 } },
+        { id: 'ASYNC-2', status: 'ok', result: { approved: true } },
+      ],
+    })
+  })
+
+  it('converts class-based results to plain objects', () => {
+    const flow = createSyncBuilder()
+      .step({
+        id: 'CONVERT-1',
+        description: 'Attach description',
+        fn: () => ({
+          seen: true,
+        }),
+      })
+      .build()
+
+    const result = flow.run({
+      person: { id: 'p5', name: 'Jon', age: 22 },
+      route: 'approve',
+      checks: [],
+    })
+
+    const converted = convertResultNode(result)
+
+    expect(result.stepResults[0]).toBeInstanceOf(StepResult)
+    expect(converted).toMatchObject({
+      status: 'ok',
+      stepResults: [{ id: 'CONVERT-1', description: 'Attach description', status: 'ok', result: { seen: true } }],
+    })
+    expect(result.stepResults[0].result).toEqual({ seen: true })
+    expect(collectFailedStepIds(result.stepResults)).toEqual([])
+  })
+
+  it('checks custom step fns against the flow ctx type', () => {
+    const builder = createSyncBuilder()
+
+    builder.step(
+      {
+        id: 'TYPE-1',
+        description: 'Uses a subset of ctx',
+      },
+      ({ person }) => ({
+        seen: person.id,
+      })
+    )
+
+    // @ts-expect-error invalid ctx contract
+    builder.step({ id: 'TYPE-2', description: 'Invalid ctx access' }, ({ missing }: { missing: number }) => ({
+      seen: missing,
+    }))
+
+    expectTypeOf(builder.build().run).toBeFunction()
   })
 })

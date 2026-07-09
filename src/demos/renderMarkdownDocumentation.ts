@@ -1,14 +1,36 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
-import type { EnrichedBranchRunResult, EnrichedFlowResult, FlowResult, FlowStepDefinition } from '../structuredFlow.ts'
+import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
+import { getOwnEntries } from '../utils.ts'
+import type { FlowResult, StepInfo } from '../structuredFlow.ts'
 import { renderProcessAsMermaidGraph } from '../mermaidRenderer.ts'
 
 type GeneratedBlockKind = 'json' | 'mermaid' | 'html-table'
 type MaybePromise<T> = T | Promise<T>
+type ConvertedStepResult = {
+  id: string
+  description?: string
+  status: 'ok' | 'skip' | 'stop' | 'error' | 'exception'
+  originalStatus?: 'ok' | 'skip' | 'stop' | 'error' | 'exception'
+  result?: Record<string, unknown>
+  selectedBranchKeys?: PropertyKey[]
+  branches?: ConvertedBranchStepFlowResult[]
+}
 
-type FlowLike<InitialCtx extends object, StepDescription = unknown> = {
-  steps: readonly FlowStepDefinition<StepDescription>[]
-  run(initial: InitialCtx): MaybePromise<FlowResult<any, any>>
+type ConvertedBranchStepFlowResult = {
+  key: PropertyKey
+  status: ConvertedStepResult['status']
+  stepResults: ConvertedStepResult[]
+}
+
+type ConvertedFlowResult = {
+  status: ConvertedStepResult['status']
+  stepResults: ConvertedStepResult[]
+}
+
+type FlowLike<InitialCtx extends object> = {
+  steps: readonly StepInfo[]
+  run(initial: InitialCtx): MaybePromise<FlowResult<any>>
 }
 
 type DocumentationDemo<InitialCtx extends object> = {
@@ -18,16 +40,16 @@ type DocumentationDemo<InitialCtx extends object> = {
   description?: string
 }
 
-type DocumentationFlow<InitialCtx extends object, StepDescription = unknown> = {
+type DocumentationFlow<InitialCtx extends object> = {
   id: string
   sourceFile?: string
-  flow: FlowLike<InitialCtx, StepDescription>
+  flow: FlowLike<InitialCtx>
   title?: string
   description?: string
   demos?: readonly DocumentationDemo<InitialCtx>[]
 }
 
-type AnyDocumentationFlow = DocumentationFlow<any, any>
+type AnyDocumentationFlow = DocumentationFlow<any>
 
 type FormattedItem = {
   id: string
@@ -76,11 +98,11 @@ type DocumentationSection<TFlows extends readonly AnyDocumentationFlow[]> =
   | HeadingSection
   | ParagraphSection
 
-type DocumentationFormatter<TNode extends FlowStepDefinition<any> = FlowStepDefinition<any>> = (
-  node: TNode
-) => FormattedStepItem
+type DocumentationFormatter<TNode extends StepInfo = StepInfo> = (node: TNode, flowId: string) => FormattedStepItem
 
-type RenderMarkdownDocumentationOptions<TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[]> = {
+type RenderMarkdownDocumentationOptions<
+  TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
+> = {
   template: string
   sourceFile: string
   formatter?: DocumentationFormatter<StepNodeFromFlows<TFlows>>
@@ -108,14 +130,15 @@ type WriteMarkdownDocumentationPageContentOptions<
   printReport?: boolean
 }
 
-type WriteMarkdownDocumentationOptions<TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[]> =
-  | WriteMarkdownDocumentationTemplateOptions<TFlows>
-  | WriteMarkdownDocumentationPageContentOptions<TFlows>
+type WriteMarkdownDocumentationOptions<
+  TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
+> = WriteMarkdownDocumentationTemplateOptions<TFlows> | WriteMarkdownDocumentationPageContentOptions<TFlows>
 
 type DemoRender<InitialCtx extends object> = {
   demo: DocumentationDemo<InitialCtx>
-  result: FlowResult<any, any>
-  enrichedResult: EnrichedFlowResult<any, any>
+  result: FlowResult<any>
+  convertedResult: ConvertedFlowResult
+  failedStepIds: string[]
 }
 
 function escapeMarkdownCodeBlock(value: string): string {
@@ -158,14 +181,15 @@ function truncate(value: string, maxLength = 160): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`
 }
 
-function defaultFormatter(node: FlowStepDefinition<any>, flowId: string): FormattedStepItem {
-  if (typeof node.description !== 'string') {
-    throw new Error(`Flow "${flowId}" uses non-string step descriptions and requires a formatter for step rendering`)
-  }
+function getStepDescription(step: Pick<StepInfo, 'options'>): string | undefined {
+  return typeof step.options?.description === 'string' ? step.options.description : undefined
+}
 
+function defaultFormatter(node: StepInfo, flowId: string): FormattedStepItem {
+  void flowId
   return {
     title: node.id,
-    description: node.description,
+    description: getStepDescription(node),
   }
 }
 
@@ -279,30 +303,40 @@ function renderStatusBadge(result: string): string {
   )}</span>`
 }
 
-function renderOutcomeBadge(result: Pick<FlowResult<any, any>, 'ok' | 'stepResults'>): string {
-  const finalResult = [...result.stepResults].reverse().find((stepResult) => stepResult.result !== 'skip')
+function renderOutcomeBadge(result: { status: string; stepResults: Array<{ status: string }> }): string {
+  const finalResult = [...result.stepResults].reverse().find((stepResult) => stepResult.status !== 'skip')
   const label =
     finalResult == null
       ? 'done'
-      : finalResult.result === 'stop'
+      : finalResult.status === 'stop'
         ? 'completed early'
-        : finalResult.result === 'exception'
+        : finalResult.status === 'exception'
           ? 'stopped by exception'
-          : result.ok
-            ? 'successful sequence run'
-            : 'completed with errors'
+          : result.status === 'error'
+            ? 'completed with errors'
+            : result.status === 'ok'
+              ? 'successful sequence run'
+              : 'done'
 
   const badgeType =
-    finalResult?.result === 'exception' || (!result.ok && finalResult?.result !== 'stop')
+    result.status === 'exception' || result.status === 'error'
       ? 'error'
-      : finalResult?.result === 'stop'
+      : result.status === 'stop'
         ? 'stop'
-        : 'ok'
+        : result.status === 'skip'
+          ? 'skip'
+          : 'ok'
 
   return renderStatusBadge(badgeType).replace(`>${escapeHtml(badgeType)}<`, `>${escapeHtml(label)}<`)
 }
 
-function renderBranchStepDetails(stepResults: EnrichedBranchRunResult['stepResults'], depth: number): string {
+function renderStepPayload(stepResult: Pick<ConvertedStepResult, 'result'>): string {
+  return stepResult.result == null || Object.keys(stepResult.result).length === 0
+    ? ''
+    : JSON.stringify(stepResult.result)
+}
+
+function renderBranchStepDetails(stepResults: ConvertedBranchStepFlowResult['stepResults'], depth: number): string {
   if (stepResults.length === 0) {
     return '<div style="margin-top:4px;color:#64748b;">No branch steps recorded.</div>'
   }
@@ -310,16 +344,15 @@ function renderBranchStepDetails(stepResults: EnrichedBranchRunResult['stepResul
   return stepResults
     .map(
       (stepResult) => `<div style="margin-top:4px;padding-left:${depth * 12}px;">
-<div>${escapeHtml(`${stepResult.id}: ${formatDescription(stepResult.description)}`)} ${renderStatusBadge(stepResult.result)}</div>
-${stepResult.info == null ? '' : `<div style="margin-top:2px;color:#475569;">${escapeHtml(String(stepResult.info))}</div>`}
-${stepResult.addToCtx == null ? '' : `<div style="margin-top:2px;color:#475569;">Add to ctx: ${escapeHtml(JSON.stringify(stepResult.addToCtx))}</div>`}
+<div>${escapeHtml(`${String(stepResult.id)}: ${formatDescription(stepResult.description)}`)} ${renderStatusBadge(String(stepResult.status))}</div>
+${renderStepPayload(stepResult) === '' ? '' : `<div style="margin-top:2px;color:#475569;">${escapeHtml(renderStepPayload(stepResult))}</div>`}
 ${renderBranchDetails(stepResult.branches, depth + 1)}
 </div>`
     )
     .join('')
 }
 
-function renderBranchDetails(branches?: EnrichedBranchRunResult[], depth = 0): string {
+function renderBranchDetails(branches?: ConvertedBranchStepFlowResult[], depth = 0): string {
   if (branches == null || branches.length === 0) {
     return ''
   }
@@ -329,8 +362,7 @@ function renderBranchDetails(branches?: EnrichedBranchRunResult[], depth = 0): s
       const stepHtml = renderBranchStepDetails(branch.stepResults, depth + 1)
 
       return `<div style="margin-bottom:10px;padding-left:${depth * 12}px;">
-<div><strong>${escapeHtml(branch.key)}</strong> ${renderStatusBadge(branch.result)}</div>
-<div style="margin-top:2px;color:#475569;">Final ctx: ${escapeHtml(JSON.stringify(branch.finalCtx))}</div>
+<div><strong>${escapeHtml(String(branch.key))}</strong> ${renderStatusBadge(String(branch.status))}</div>
 ${stepHtml}
 </div>`
     })
@@ -339,28 +371,23 @@ ${stepHtml}
 
 function renderResultTable(
   markerId: string,
-  result: Pick<EnrichedFlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults'>
+  result: Pick<ConvertedFlowResult, 'status' | 'stepResults'>,
+  failedStepIds: string[]
 ): string {
-  const failedStepIds = result.failedStepIds()
   const rowsHtml = result.stepResults
     .map(
       (stepResult) => `<tr>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(stepResult.id)}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(String(stepResult.id))}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(formatDescription(stepResult.description))}</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderStatusBadge(stepResult.result)}</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(
-        stepResult.info == null ? '' : String(stepResult.info)
-      )}</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(
-        stepResult.addToCtx == null ? '' : JSON.stringify(stepResult.addToCtx)
-      )}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderStatusBadge(String(stepResult.status))}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(renderStepPayload(stepResult))}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderBranchDetails(stepResult.branches)}</td>
 </tr>`
     )
     .join('')
 
   return [
-    `<p><strong>Overall outcome:</strong> ${renderOutcomeBadge(result)}<br><strong>Failed steps:</strong> ${escapeHtml(
+    `<p><strong>Overall outcome:</strong> ${renderOutcomeBadge(result as unknown as { status: string; stepResults: Array<{ status: string }> })}<br><strong>Failed steps:</strong> ${escapeHtml(
       failedStepIds.length === 0 ? 'none' : failedStepIds.join(', ')
     )}</p>`,
     wrapGeneratedBlock(
@@ -368,7 +395,7 @@ function renderResultTable(
       'html-table',
       [
         '<table style="width:100%;border-collapse:collapse;font-size:14px;">',
-        '<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Result</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Info</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Add to ctx</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>',
+        '<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>',
         `<tbody>${rowsHtml}</tbody>`,
         '</table>',
       ].join('\n')
@@ -497,9 +524,9 @@ function formatDemo(demo: DocumentationDemo<any>): FormattedItem {
 function formatStep(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  step: Pick<FlowStepDefinition<unknown>, 'id' | 'description'>
+  step: StepInfo
 ): FormattedItem {
-  const formatted = formatter == null ? defaultFormatter(step, flow.id) : formatter(step)
+  const formatted = formatter == null ? defaultFormatter(step, flow.id) : formatter(step, flow.id)
 
   return {
     id: step.id,
@@ -560,7 +587,11 @@ function demoAnchorBase(
   return slugify(`${flowAnchorBase(formatter, flow)}-${formatDemo(demo).id || demo.id}`)
 }
 
-function anchorForExamplePart(formatter: DocumentationFormatter | undefined, flow: DocumentationFlow<any>, suffix: string): string {
+function anchorForExamplePart(
+  formatter: DocumentationFormatter | undefined,
+  flow: DocumentationFlow<any>,
+  suffix: string
+): string {
   return `${flowAnchorBase(formatter, flow)}-${suffix}`
 }
 
@@ -612,7 +643,7 @@ function firstUsedDemoAnchor(
 function renderTableStepLabel(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  step: Pick<FlowStepDefinition<unknown>, 'id' | 'description'>
+  step: StepInfo
 ): string {
   const formatted = formatStep(formatter, flow, step)
 
@@ -628,20 +659,21 @@ function renderTableStepLabel(
 function renderStaticBranchColumns(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  branches?: Record<string, FlowLike<any>>
+  branches?: StepInfo['branches']
 ): string {
-  if (branches == null || Object.keys(branches).length === 0) {
+  const entries = branches == null ? [] : getOwnEntries(branches)
+
+  if (entries.length === 0) {
     return '<div style="color:#94a3b8;">-</div>'
   }
 
-  const entries = Object.entries(branches)
   const columnHtml = entries
     .map(([key, flow]) => {
       const nestedDocumentationFlow = createNestedFlowExample(formatter, flow)
       const nestedTable = renderStaticFlowLayoutTable(formatter, nestedDocumentationFlow, flow.steps)
 
       return `<div style="border:1px solid #d0d7de;border-radius:6px;padding:10px;background:#f8fafc;">
-<div><strong>${escapeHtml(key)}</strong></div>
+<div><strong>${escapeHtml(String(key))}</strong></div>
 ${flow.steps.length === 0 ? '' : `<div style="margin-top:8px;">${nestedTable}</div>`}
 </div>`
     })
@@ -655,7 +687,7 @@ ${flow.steps.length === 0 ? '' : `<div style="margin-top:8px;">${nestedTable}</d
 function renderStaticFlowLayoutRows(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  steps: readonly FlowStepDefinition<unknown>[]
+  steps: readonly StepInfo[]
 ): string {
   return steps
     .map(
@@ -670,7 +702,7 @@ function renderStaticFlowLayoutRows(
 function renderStaticFlowLayoutTable(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  steps: readonly FlowStepDefinition<unknown>[]
+  steps: readonly StepInfo[]
 ): string {
   return [
     '<table style="width:100%;border-collapse:collapse;font-size:13px;">',
@@ -685,7 +717,7 @@ function renderStaticFlowHtmlBlock(
   anchorId: string,
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  steps: readonly FlowStepDefinition<unknown>[]
+  steps: readonly StepInfo[]
 ): string {
   return wrapWithAnchor(
     anchorId,
@@ -693,11 +725,12 @@ function renderStaticFlowHtmlBlock(
   )
 }
 
-function renderDemoResultParts<Steps extends readonly any[]>(
+function renderDemoResultParts(
   markerId: string,
   sequenceInit: unknown,
-  result: Pick<FlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults' | 'finalCtx'> & { steps: Steps },
-  enrichedResult: Pick<EnrichedFlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults'>
+  result: Pick<FlowResult<any>, 'status' | 'stepResults'>,
+  convertedResult: ConvertedFlowResult,
+  failedStepIds: string[]
 ) {
   return {
     initJson: [
@@ -707,24 +740,23 @@ function renderDemoResultParts<Steps extends readonly any[]>(
     resultJson: [
       '<p><strong>Resulting JSON</strong></p>',
       renderJsonCodeBlock(`${markerId}-result`, {
-        ok: result.ok,
-        failedStepIds: result.failedStepIds(),
-        stepResults: result.stepResults,
-        finalCtx: result.finalCtx,
+        ...convertedResult,
+        failedStepIds,
       }),
     ].join('\n'),
     resultMermaid: renderMermaidBlock(markerId, renderProcessAsMermaidGraph(result)),
-    resultHtml: renderResultTable(markerId, enrichedResult),
+    resultHtml: renderResultTable(markerId, convertedResult, failedStepIds),
   }
 }
 
-function renderDemoResultSection<Steps extends readonly any[]>(
+function renderDemoResultSection(
   markerId: string,
   sequenceInit: unknown,
-  result: Pick<FlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults' | 'finalCtx'> & { steps: Steps },
-  enrichedResult: Pick<EnrichedFlowResult<any, any>, 'ok' | 'failedStepIds' | 'stepResults'>
+  result: Pick<FlowResult<any>, 'status' | 'stepResults'>,
+  convertedResult: ConvertedFlowResult,
+  failedStepIds: string[]
 ): string {
-  const parts = renderDemoResultParts(markerId, sequenceInit, result, enrichedResult)
+  const parts = renderDemoResultParts(markerId, sequenceInit, result, convertedResult, failedStepIds)
 
   return renderThreeColumnHtml(
     renderMarkdownPane([parts.initJson, '', parts.resultJson].join('\n')),
@@ -738,7 +770,10 @@ type LeafFlowEntry = {
   referencedBy: DocumentationFlow<any>[]
 }
 
-function createNestedFlowExample(formatter: DocumentationFormatter | undefined, flow: FlowLike<any>): DocumentationFlow<any> {
+function createNestedFlowExample(
+  formatter: DocumentationFormatter | undefined,
+  flow: FlowLike<any>
+): DocumentationFlow<any> {
   const firstStep = flow.steps[0]
 
   if (firstStep == null) {
@@ -782,7 +817,7 @@ function collectNestedFlows(flows: readonly DocumentationFlow<any>[]): LeafFlowE
       visited.add(currentFlow)
 
       for (const step of currentFlow.steps) {
-        for (const branchFlow of Object.values(step.branches ?? {})) {
+        for (const branchFlow of Object.values(step.branches ?? {}) as FlowLike<any>[]) {
           pending.push(branchFlow)
 
           if (rootFlows.has(branchFlow)) {
@@ -817,7 +852,10 @@ function renderFlowHeading(level: number, formatter: DocumentationFormatter | un
   return `${'#'.repeat(level)} ${formatted.title}${description}`
 }
 
-function renderReferencedByList(formatter: DocumentationFormatter | undefined, referencedBy: readonly DocumentationFlow<any>[]) {
+function renderReferencedByList(
+  formatter: DocumentationFormatter | undefined,
+  referencedBy: readonly DocumentationFlow<any>[]
+) {
   if (referencedBy.length === 0) {
     return ''
   }
@@ -873,7 +911,10 @@ function renderLeafFlowsHtml(
       const referencedBy = renderReferencedByList(formatter, leafFlow.referencedBy)
 
       return [
-        wrapWithAnchor(anchorForFlowSection(formatter, leafDoc), renderFlowHeading(leafFlowHeadingLevel, formatter, leafDoc)),
+        wrapWithAnchor(
+          anchorForFlowSection(formatter, leafDoc),
+          renderFlowHeading(leafFlowHeadingLevel, formatter, leafDoc)
+        ),
         '',
         referencedBy,
         wrapGeneratedBlock(
@@ -1178,14 +1219,26 @@ async function renderGeneratedExample(
 
   for (const rendered of demoRenders) {
     const markerId = replaceKeyToMarkerId(demoBase(flow.id, rendered.demo.id))
-    const parts = renderDemoResultParts(markerId, rendered.demo.init, rendered.result, rendered.enrichedResult)
+    const parts = renderDemoResultParts(
+      markerId,
+      rendered.demo.init,
+      rendered.result,
+      rendered.convertedResult,
+      rendered.failedStepIds
+    )
 
     if (templateIncludes(nextMarkdown, demoFullTablePlaceholder(flow.id, rendered.demo.id))) {
       nextMarkdown = nextMarkdown.replace(
         templatePlaceholderToken(demoFullTablePlaceholder(flow.id, rendered.demo.id)),
         wrapWithAnchor(
           anchorForDemoPart(formatter, flow, rendered.demo, 'full-table'),
-          renderDemoResultSection(markerId, rendered.demo.init, rendered.result, rendered.enrichedResult)
+          renderDemoResultSection(
+            markerId,
+            rendered.demo.init,
+            rendered.result,
+            rendered.convertedResult,
+            rendered.failedStepIds
+          )
         )
       )
     }
@@ -1231,10 +1284,12 @@ async function renderAllDemoRenders(
         const demoRenders = await Promise.all(
           (flow.demos ?? []).map(async (demo) => {
             const result = await flow.flow.run(demo.init)
+            const failedStepIds = collectFailedStepIds(result.stepResults)
             return {
               demo,
               result,
-              enrichedResult: result.enrichResult(),
+              convertedResult: convertResultNode(result) as ConvertedFlowResult,
+              failedStepIds,
             } satisfies DemoRender<any>
           })
         )
@@ -1256,13 +1311,20 @@ async function renderMarkdownDocumentation<const TFlows extends readonly AnyDocu
   const demoRendersByExampleId = await renderAllDemoRenders(flows)
 
   if (templateIncludes(markdown, tocPlaceholder())) {
-    markdown = markdown.replace(templatePlaceholderToken(tocPlaceholder()), renderToc(template, formatter, flows, pageContent))
+    markdown = markdown.replace(
+      templatePlaceholderToken(tocPlaceholder()),
+      renderToc(template, formatter, flows, pageContent)
+    )
   }
 
   if (templateIncludes(markdown, allFlowsHtmlMermaidPlaceholder())) {
     markdown = markdown.replace(
       templatePlaceholderToken(allFlowsHtmlMermaidPlaceholder()),
-      renderAllFlowsHtmlMermaid(formatter, flows, headingLevelBeforeMarker(pageContent, allFlowsHtmlMermaidPlaceholder()))
+      renderAllFlowsHtmlMermaid(
+        formatter,
+        flows,
+        headingLevelBeforeMarker(pageContent, allFlowsHtmlMermaidPlaceholder())
+      )
     )
   }
 
@@ -1315,7 +1377,9 @@ export async function writeMarkdownDocumentation<const TFlows extends readonly A
   if (printReport) {
     logMarkerReport(
       template,
-      'templateFile' in renderOptions && renderOptions.templateFile != null ? renderOptions.templateFile : '[pageContent]',
+      'templateFile' in renderOptions && renderOptions.templateFile != null
+        ? renderOptions.templateFile
+        : '[pageContent]',
       documentationSourceFile,
       renderOptions.flows ?? []
     )

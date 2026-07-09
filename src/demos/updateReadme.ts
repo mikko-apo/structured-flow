@@ -1,290 +1,155 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
 import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
+import { h1, p, writeMarkdownDocumentation } from './renderMarkdownDocumentation.ts'
 
-import { writeMarkdownDocumentation } from './renderMarkdownDocumentation.ts'
+const documentationSourceFile = fileURLToPath(import.meta.url)
 
-/* SEQUENCE:START */
-type SubmittedForm = { id: string }
-type Occupancy = { id: string }
-
-function getOccupancies({ form }: { form: SubmittedForm }) {
-  return {
-    occupancies: form.id === '123' ? [{ id: 'a' + form.id }] : [{ id: 'a' + form.id }, { id: 'b' + form.id }],
-  }
+type SubmittedForm = {
+  id: string
+  occupantCount: number
+  requiresManualReview: boolean
 }
 
-function verifyOccupancyCount({ form, occupancies }: { form: SubmittedForm; occupancies: Occupancy[] }) {
-  if (form.id === '300') {
-    return stepResult({
-      result: 'stop',
-      info: 'The first two records are enough here, so the sequence can finish early.',
-    })
-  }
-
-  if (form.id === '400') {
-    return stepResult({
-      result: 'exception',
-      info: 'A contradictory record was discovered, so the sequence stops immediately.',
-    })
-  }
-
-  return stepResult({
-    result: occupancies.length === 2 ? 'ok' : 'error',
-    info:
-      occupancies.length === 2
-        ? 'Recovered the full two-record occupancy trail.'
-        : 'Expected two occupancy records but found an incomplete trail.',
-  })
+type ReviewCtx = {
+  form: SubmittedForm
+  checks: Array<'audit' | 'rules'>
 }
 
-async function crossCheckFormAndOccupancies({ form }: { form: SubmittedForm; occupancies: Occupancy[] }) {
-  return stepResult({
-    result: form.id === '400' ? 'error' : 'ok',
-    info:
-      form.id === '123'
-        ? 'The submitted form is acceptable, but the occupancy trail is still incomplete.'
-        : 'The submitted form and occupancy trail tell a consistent story.',
-  })
+type StepInfo = {
+  id: string
+  description: string
+  fn?: (ctx: ReviewCtx) => Record<string, unknown> | Promise<Record<string, unknown>>
 }
 
-const sequence = createAsyncFlow('IC10', 'Get linked occupancy records', getOccupancies)
-  .step('IC25', 'Count the recovered occupancy trail and insist on exactly two records', verifyOccupancyCount)
-  .step('IC30', 'Cross-check the submitted form against the recovered occupancy trail', crossCheckFormAndOccupancies)
+/* CORE_API:START */
+const loadOccupancies = createAsyncFlow(
+  'IC10',
+  async ({ form }: { form: SubmittedForm }) => ({
+    occupancyCount: form.occupantCount,
+  }),
+  { description: 'Get linked occupancy records' }
+)
+  .step(
+    'IC20',
+    ({ form }) =>
+      stepResult({
+        status: form.occupantCount >= 2 ? 'ok' : 'error',
+        info: form.occupantCount >= 2 ? 'Occupancy count looks good.' : 'Expected at least two occupancies.',
+      }),
+    { description: 'Verify occupancy count' }
+  )
   .build()
-/* SEQUENCE:END */
+/* CORE_API:END */
 
-/* STRUCTURED_STEP_DESCRIPTION:START */
-type StepMeta = {
-  label: string
-  area: 'billing' | 'risk'
-  severity: 'low' | 'high'
-}
-
-const autoReviewFlow = createSyncFlow(
-  'AUTO-1',
-  { label: 'Auto approve', area: 'risk', severity: 'low' },
-  ({ amount, normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
-    autoApproved: normalizedAmount <= Math.abs(amount),
+/* RESOLVER_FLOW:START */
+const reviewFlow = createSyncFlow({
+  resolver: (step: StepInfo) => ({
+    id: step.id,
+    description: step.description,
+    stepFn: step.fn,
+  }),
+})
+  .step({
+    id: 'VALIDATE-1',
+    description: 'Validate request',
+    fn: ({ form }) => ({
+      valid: form.id.length > 0,
+    }),
   })
-)
-
-const manualReviewFlow = createSyncFlow(
-  'MANUAL-1',
-  { label: 'Manual review', area: 'risk', severity: 'high' },
-  ({ normalizedAmount }: { amount: number; normalizedAmount: number }) => ({
-    queuedForReview: normalizedAmount > 1000,
-  })
-)
-
-const structuredStepDescriptionFlow = createSyncFlow<StepMeta>(
-  'VALIDATE',
-  { label: 'Validate amount', area: 'billing', severity: 'high' },
-  ({ amount }) => ({
-    normalizedAmount: Math.abs(amount),
-  })
-)
   .branch(
-    'ROUTE',
-    { label: 'Route review', area: 'risk', severity: 'low' },
-    ({ normalizedAmount }) => (normalizedAmount > 1000 ? 'manual' : 'auto'),
     {
-      auto: autoReviewFlow,
-      manual: manualReviewFlow,
+      id: 'REVIEW-1',
+      description: 'Route review',
+    },
+    ({ form }) => (form.requiresManualReview ? 'manual' : 'auto'),
+    {
+      auto: createSyncFlow<ReviewCtx, StepInfo>({
+        resolver: (step) => ({
+          id: step.id,
+          description: step.description,
+          stepFn: step.fn,
+        }),
+      }).step({
+        id: 'AUTO-1',
+        description: 'Auto approve',
+        fn: ({ checks }) => ({
+          checksSeen: checks.length,
+        }),
+      }),
+      manual: createSyncFlow<ReviewCtx, StepInfo>({
+        resolver: (step) => ({
+          id: step.id,
+          description: step.description,
+          stepFn: step.fn,
+        }),
+      }).step({
+        id: 'MANUAL-1',
+        description: 'Send to manual review',
+        fn: ({ form }) =>
+          stepResult({
+            status: 'error',
+            info: `Manual review required for ${form.id}.`,
+          }),
+      }),
     }
   )
   .build()
-/* STRUCTURED_STEP_DESCRIPTION:END */
-
-/* BRANCH_ONE_OF_THREE:START */
-type PostingKind = 'income' | 'expense' | 'transfer'
-
-const incomeFlow = createSyncFlow('IN-1', 'Handle income', ({ amount }: { amount: number; kind: PostingKind }) => ({
-  normalizedAmount: amount,
-}))
-
-const expenseFlow = createSyncFlow('EX-1', 'Handle expense', ({ amount }: { amount: number; kind: PostingKind }) => ({
-  normalizedAmount: -amount,
-}))
-
-const transferFlow = createSyncFlow('TR-1', 'Handle transfer', ({ kind }: { amount: number; kind: PostingKind }) => ({
-  transferSeen: kind === 'transfer',
-}))
-
-const oneOfThreeBranchFlow = createSyncFlow(
-  'ROUTE',
-  'Route posting kind',
-  ({ kind }: { amount: number; kind: PostingKind }) => kind,
-  {
-    income: incomeFlow,
-    expense: expenseFlow,
-    transfer: transferFlow,
-  }
-).build()
-/* BRANCH_ONE_OF_THREE:END */
-
-/* BRANCH_TWO_OF_THREE:START */
-type CheckName = 'tax' | 'fraud' | 'policy'
-
-const taxFlow = createAsyncFlow(
-  'TAX-1',
-  'Check taxes',
-  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
-    taxChecked: checks.includes('tax'),
-  })
-)
-
-const fraudFlow = createAsyncFlow(
-  'FRAUD-1',
-  'Check fraud',
-  async ({ checks }: { amount: number; checks: CheckName[] }) =>
-    stepResult({
-      result: checks.includes('fraud') ? 'error' : 'skip',
-      info: 'Fraud review failed.',
-    })
-)
-
-const policyFlow = createAsyncFlow(
-  'POLICY-1',
-  'Check policy',
-  async ({ checks }: { amount: number; checks: CheckName[] }) => ({
-    policyChecked: checks.includes('policy'),
-  })
-)
-
-const twoOfThreeBranchFlow = createAsyncFlow(
-  'CHECKS',
-  'Run selected checks',
-  ({ checks }: { amount: number; checks: CheckName[] }) => checks,
-  {
-    tax: taxFlow,
-    fraud: fraudFlow,
-    policy: policyFlow,
-  }
-).build()
-/* BRANCH_TWO_OF_THREE:END */
-
-/* NESTED_BRANCH:START */
-type FirstBranch = 'A' | 'B'
-type SecondBranch = 'C' | 'D'
-
-const branchAFlow = createSyncFlow(
-  'A-1',
-  'Handle A',
-  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
-    visitedA: firstBranch === 'A',
-  })
-)
-
-const branchCFlow = createSyncFlow(
-  'C-1',
-  'Handle C',
-  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
-    visitedC: secondBranch === 'C',
-  })
-)
-
-const branchDFlow = createSyncFlow(
-  'D-1',
-  'Handle D',
-  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => ({
-    visitedD: secondBranch === 'D',
-  })
-)
-
-const branchBFlow = createSyncFlow(
-  'B-ROUTE',
-  'Route second branch',
-  ({ secondBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => secondBranch,
-  {
-    C: branchCFlow,
-    D: branchDFlow,
-  }
-)
-
-const nestedBranchFlow = createSyncFlow(
-  'ROOT-ROUTE',
-  'Route first branch',
-  ({ firstBranch }: { firstBranch: FirstBranch; secondBranch: SecondBranch }) => firstBranch,
-  {
-    A: branchAFlow,
-    B: branchBFlow,
-  }
-).build()
-/* NESTED_BRANCH:END */
-
-/* BRANCH_SKIP:START */
-const approveFlow = createSyncFlow('APP-1', 'Approve', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
-  approved: !shouldRunChecks,
-}))
-
-const rejectFlow = createSyncFlow('REJ-1', 'Reject', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
-  rejected: !shouldRunChecks,
-}))
-
-const reviewFlow = createSyncFlow('REV-1', 'Review', ({ shouldRunChecks }: { shouldRunChecks: boolean }) => ({
-  reviewed: shouldRunChecks,
-}))
-
-const skippedBranchFlow = createSyncFlow(
-  'OPTIONAL-CHECKS',
-  'Optionally run checks',
-  ({ shouldRunChecks }: { shouldRunChecks: boolean }) => (shouldRunChecks ? 'review' : 'skip'),
-  {
-    approve: approveFlow,
-    reject: rejectFlow,
-    review: reviewFlow,
-  }
-).build()
-/* BRANCH_SKIP:END */
+/* RESOLVER_FLOW:END */
 
 export async function writeStructuredProcessExampleMarkdown(
   outputFile = join(dirname(fileURLToPath(import.meta.url)), '../..', 'README.md')
 ) {
-  const templateFile = join(dirname(fileURLToPath(import.meta.url)), 'structuredFlowDemo.readme.template.md')
-  const documentationSourceFile = fileURLToPath(import.meta.url)
-
   await writeMarkdownDocumentation({
-    templateFile,
     documentationSourceFile,
     outputFile,
     printReport: true,
+    formatter: (node) => ({
+      title: node.id,
+      description: node.options?.description ?? '',
+    }),
     flows: [
       {
-        id: 'SEQUENCE',
-        flow: sequence,
+        id: 'CORE_API',
+        title: 'Core API',
+        description: 'Basic async validation flow with a fixed input ctx.',
+        flow: loadOccupancies,
         demos: [
-          { id: 'PASSING', init: { form: { id: '200' } } },
-          { id: 'FAILING', init: { form: { id: '123' } } },
-          { id: 'STOP', init: { form: { id: '300' } } },
-          { id: 'EXCEPTION', init: { form: { id: '400' } } },
+          {
+            id: 'ok',
+            init: { form: { id: '200', occupantCount: 2, requiresManualReview: false } },
+          },
         ],
       },
       {
-        id: 'STRUCTURED_STEP_DESCRIPTION',
-        flow: structuredStepDescriptionFlow,
-        demos: [{ id: 'DEMO', init: { amount: -1400 } }],
+        id: 'RESOLVER_FLOW',
+        title: 'Resolver-based flow',
+        description: 'Flow created with resolver so step ids carry their own description and optional step fn.',
+        flow: reviewFlow,
+        demos: [
+          {
+            id: 'manual',
+            init: {
+              form: { id: '400', occupantCount: 1, requiresManualReview: true },
+              checks: ['audit', 'rules'],
+            },
+          },
+        ],
       },
-      {
-        id: 'BRANCH_ONE_OF_THREE',
-        flow: oneOfThreeBranchFlow,
-        demos: [{ id: 'DEMO', init: { amount: 24, kind: 'expense' } }],
-      },
-      {
-        id: 'BRANCH_TWO_OF_THREE',
-        flow: twoOfThreeBranchFlow,
-        demos: [{ id: 'DEMO', init: { amount: 8, checks: ['tax', 'fraud'] } }],
-      },
-      {
-        id: 'NESTED_BRANCH',
-        flow: nestedBranchFlow,
-        demos: [{ id: 'DEMO', init: { firstBranch: 'B', secondBranch: 'D' } }],
-      },
-      {
-        id: 'BRANCH_SKIP',
-        flow: skippedBranchFlow,
-        demos: [{ id: 'DEMO', init: { shouldRunChecks: false } }],
-      },
+    ],
+    pageContent: [
+      h1('Core API'),
+      p(
+        "const validations = createAsyncFlow('IC10', async ({ form }) => ({ occupancyCount: form.occupantCount }), { description: 'Get linked occupancy records' })"
+      ),
+      p("const result = await validations.run({form: {id: '200', occupantCount: 2, requiresManualReview: false}})"),
+      h1('Resolver Flow'),
+      p(
+        'createSyncFlow({ resolver }).step(stepInfo) resolves id, description, and an optional default step function from the step info object.'
+      ),
+      'ALL_FLOWS_HTML_MERMAID',
+      'LEAF_FLOWS_HTML',
     ],
   })
 }
