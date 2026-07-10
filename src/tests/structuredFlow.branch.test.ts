@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
-import { BranchStepFlowResult, createAsyncFlow, createSyncFlow, StepResult, stepResult } from '../structuredFlow'
+import { BranchStepFlowResult, createAsyncFlow, createSyncFlow, StepBranchInfo, StepResult, stepResult } from '../structuredFlow'
 
 type ReviewCtx = {
   route: 'approve' | 'reject'
@@ -87,6 +87,7 @@ describe('FlowBuilder.branch', () => {
       { id: 'ROUTE-1', options: { description: 'Route by review decision' } },
       { id: 'AFTER-1', options: { description: 'After branch' } },
     ])
+    expect(flow.steps[0]).toBeInstanceOf(StepBranchInfo)
     expect(result.status).toBe('ok')
     expect(result.stepResults[0]).toBeInstanceOf(StepResult)
     expect(result.stepResults[0].branches?.[0]).toBeInstanceOf(BranchStepFlowResult)
@@ -303,7 +304,7 @@ describe('FlowBuilder.branch', () => {
     })
   })
 
-  it('marks a sync branch step as exception when a child branch returns a promise', () => {
+  it('rejects async child flows in sync branches', () => {
     const asyncChildFlow = createAsyncMetaFlow()
       .step({
         id: 'ASYNC-CHILD',
@@ -314,8 +315,8 @@ describe('FlowBuilder.branch', () => {
       })
       .build()
 
-    const flow = createSyncMetaFlow()
-      .branch(
+    expect(() =>
+      createSyncMetaFlow().branch(
         {
           id: 'SYNC-PARENT',
           description: 'Sync branch parent',
@@ -325,32 +326,7 @@ describe('FlowBuilder.branch', () => {
           reject: asyncChildFlow as any,
         }
       )
-      .step(
-        {
-          id: 'AFTER-SYNC-BRANCH',
-          description: 'Skipped after branch exception',
-        },
-        () => ({
-          reached: true,
-        })
-      )
-      .build()
-
-    const result = flow.run({
-      route: 'reject',
-      severity: 'high',
-      checks: [],
-    })
-
-    expect(result.status).toBe('exception')
-    expect(collectFailedStepIds(result.stepResults)).toEqual(['SYNC-PARENT'])
-    expect(convertResultNode(result)).toMatchObject({
-      status: 'exception',
-      stepResults: [
-        { id: 'SYNC-PARENT', status: 'exception' },
-        { id: 'AFTER-SYNC-BRANCH', status: 'skip' },
-      ],
-    })
+    ).toThrow('cannot include async flow')
   })
 
   it('checks branch selectors against the flow ctx type', () => {

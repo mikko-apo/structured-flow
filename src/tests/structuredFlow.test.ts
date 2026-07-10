@@ -227,6 +227,43 @@ describe('structuredFlow core execution', () => {
     })
   })
 
+  it('marks a sync step as exception when a step function returns a promise at runtime', () => {
+    const flow = createSyncBuilder()
+      .step(
+        {
+          id: 'PROMISE-1',
+          description: 'Unexpected promise',
+        },
+        (async () => ({ loaded: true })) as any
+      )
+      .step(
+        {
+          id: 'AFTER-PROMISE',
+          description: 'Skipped after runtime promise',
+        },
+        () => ({
+          reached: true,
+        })
+      )
+      .build()
+
+    const result = flow.run({
+      person: { id: 'p4b', name: 'Ivy', age: 27 },
+      route: 'approve',
+      checks: ['audit'],
+    })
+
+    expect(result.status).toBe('exception')
+    expect(collectFailedStepIds(result.stepResults)).toEqual(['PROMISE-1'])
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'exception',
+      stepResults: [
+        { id: 'PROMISE-1', status: 'exception' },
+        { id: 'AFTER-PROMISE', status: 'skip' },
+      ],
+    })
+  })
+
   it('converts class-based results to plain objects', () => {
     const flow = createSyncBuilder()
       .step({

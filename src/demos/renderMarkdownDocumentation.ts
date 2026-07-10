@@ -2,7 +2,8 @@ import { readFileSync, writeFileSync } from 'node:fs'
 
 import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
 import { getOwnEntries } from '../utils.ts'
-import type { FlowResult, StepInfo } from '../structuredFlow.ts'
+import type { FlowResult, FlowStepInfo } from '../structuredFlow.ts'
+import { StepBranchInfo } from '../structuredFlow.ts'
 import { renderProcessAsMermaidGraph } from '../mermaidRenderer.ts'
 
 type GeneratedBlockKind = 'json' | 'mermaid' | 'html-table'
@@ -29,7 +30,7 @@ type ConvertedFlowResult = {
 }
 
 type FlowLike<InitialCtx extends object> = {
-  steps: readonly StepInfo[]
+  steps: readonly FlowStepInfo[]
   run(initial: InitialCtx): MaybePromise<FlowResult<any>>
 }
 
@@ -98,7 +99,7 @@ type DocumentationSection<TFlows extends readonly AnyDocumentationFlow[]> =
   | HeadingSection
   | ParagraphSection
 
-type DocumentationFormatter<TNode extends StepInfo = StepInfo> = (node: TNode, flowId: string) => FormattedStepItem
+type DocumentationFormatter<TNode extends FlowStepInfo = FlowStepInfo> = (node: TNode, flowId: string) => FormattedStepItem
 
 type RenderMarkdownDocumentationOptions<
   TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
@@ -181,11 +182,11 @@ function truncate(value: string, maxLength = 160): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`
 }
 
-function getStepDescription(step: Pick<StepInfo, 'options'>): string | undefined {
+function getStepDescription(step: Pick<FlowStepInfo, 'options'>): string | undefined {
   return typeof step.options?.description === 'string' ? step.options.description : undefined
 }
 
-function defaultFormatter(node: StepInfo, flowId: string): FormattedStepItem {
+function defaultFormatter(node: FlowStepInfo, flowId: string): FormattedStepItem {
   void flowId
   return {
     title: node.id,
@@ -524,7 +525,7 @@ function formatDemo(demo: DocumentationDemo<any>): FormattedItem {
 function formatStep(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  step: StepInfo
+  step: FlowStepInfo
 ): FormattedItem {
   const formatted = formatter == null ? defaultFormatter(step, flow.id) : formatter(step, flow.id)
 
@@ -643,7 +644,7 @@ function firstUsedDemoAnchor(
 function renderTableStepLabel(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  step: StepInfo
+  step: FlowStepInfo
 ): string {
   const formatted = formatStep(formatter, flow, step)
 
@@ -656,12 +657,20 @@ function renderTableStepLabel(
   ].join('')
 }
 
+function getBranchEntries(step: FlowStepInfo): Array<[PropertyKey, FlowLike<any>]> {
+  if (!(step instanceof StepBranchInfo)) {
+    return []
+  }
+
+  return getOwnEntries(step.branches)
+}
+
 function renderStaticBranchColumns(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  branches?: StepInfo['branches']
+  step: FlowStepInfo
 ): string {
-  const entries = branches == null ? [] : getOwnEntries(branches)
+  const entries = getBranchEntries(step)
 
   if (entries.length === 0) {
     return '<div style="color:#94a3b8;">-</div>'
@@ -687,13 +696,13 @@ ${flow.steps.length === 0 ? '' : `<div style="margin-top:8px;">${nestedTable}</d
 function renderStaticFlowLayoutRows(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  steps: readonly StepInfo[]
+  steps: readonly FlowStepInfo[]
 ): string {
   return steps
     .map(
       (step) => `<tr>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;">${renderTableStepLabel(formatter, flow, step)}</td>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderStaticBranchColumns(formatter, flow, step.branches)}</td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderStaticBranchColumns(formatter, flow, step)}</td>
 </tr>`
     )
     .join('')
@@ -702,7 +711,7 @@ function renderStaticFlowLayoutRows(
 function renderStaticFlowLayoutTable(
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  steps: readonly StepInfo[]
+  steps: readonly FlowStepInfo[]
 ): string {
   return [
     '<table style="width:100%;border-collapse:collapse;font-size:13px;">',
@@ -717,7 +726,7 @@ function renderStaticFlowHtmlBlock(
   anchorId: string,
   formatter: DocumentationFormatter | undefined,
   flow: DocumentationFlow<any>,
-  steps: readonly StepInfo[]
+  steps: readonly FlowStepInfo[]
 ): string {
   return wrapWithAnchor(
     anchorId,
@@ -817,7 +826,7 @@ function collectNestedFlows(flows: readonly DocumentationFlow<any>[]): LeafFlowE
       visited.add(currentFlow)
 
       for (const step of currentFlow.steps) {
-        for (const branchFlow of Object.values(step.branches ?? {}) as FlowLike<any>[]) {
+        for (const branchFlow of Object.values(step instanceof StepBranchInfo ? step.branches : {}) as FlowLike<any>[]) {
           pending.push(branchFlow)
 
           if (rootFlows.has(branchFlow)) {
