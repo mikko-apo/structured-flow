@@ -1,5 +1,5 @@
-import type { StepFnPayload, StepStatus } from './structuredFlow.ts'
-import { BranchStepFlowResult, FlowResult, StepResult } from './structuredFlow.ts'
+import type { StepFnPayload, StepStatus } from './flowClasses.ts'
+import { BranchStepFlowResult, FlowResult, StepResult } from './flowClasses.ts'
 
 export type FailedStepIdOptions = {
   branchPrefix?: boolean

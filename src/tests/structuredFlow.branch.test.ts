@@ -1,7 +1,8 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
-import { BranchStepFlowResult, createAsyncFlow, createSyncFlow, StepBranchInfo, StepResult, stepResult } from '../structuredFlow'
+import { BranchStepFlowResult, StepBranchInfo, StepResult } from '../flowClasses'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
 
 type ReviewCtx = {
   route: 'approve' | 'reject'
@@ -16,7 +17,7 @@ type StepMeta = {
 }
 
 function createSyncMetaFlow() {
-  return createSyncFlow<ReviewCtx, StepMeta>({
+  return createSyncFlow<StepMeta, ReviewCtx>({
     resolver: (step) => ({
       id: step.id,
       description: step.description,
@@ -26,7 +27,7 @@ function createSyncMetaFlow() {
 }
 
 function createAsyncMetaFlow() {
-  return createAsyncFlow<ReviewCtx, StepMeta>({
+  return createAsyncFlow<StepMeta, ReviewCtx>({
     resolver: (step) => ({
       id: step.id,
       description: step.description,

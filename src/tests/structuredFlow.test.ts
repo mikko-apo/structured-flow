@@ -1,7 +1,8 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
-import { createAsyncFlow, createSyncFlow, StepResult, stepResult } from '../structuredFlow'
+import { StepResult } from '../flowClasses'
+import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
 
 type PersonCtx = {
   person: {
@@ -20,7 +21,7 @@ type StepId = {
 }
 
 function createSyncBuilder() {
-  return createSyncFlow<PersonCtx, StepId>({
+  return createSyncFlow<StepId, PersonCtx>({
     resolver: (step) => ({
       id: step.id,
       description: step.description,
@@ -30,7 +31,7 @@ function createSyncBuilder() {
 }
 
 function createAsyncBuilder() {
-  return createAsyncFlow<PersonCtx, StepId>({
+  return createAsyncFlow<StepId, PersonCtx>({
     resolver: (step) => ({
       id: step.id,
       description: step.description,

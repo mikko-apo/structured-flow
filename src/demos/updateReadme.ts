@@ -65,7 +65,7 @@ const reviewFlow = createSyncFlow({
     },
     ({ form }) => (form.requiresManualReview ? 'manual' : 'auto'),
     {
-      auto: createSyncFlow<ReviewCtx, StepInfo>({
+      auto: createSyncFlow<StepInfo, ReviewCtx>({
         resolver: (step) => ({
           id: step.id,
           description: step.description,
@@ -78,7 +78,7 @@ const reviewFlow = createSyncFlow({
           checksSeen: checks.length,
         }),
       }),
-      manual: createSyncFlow<ReviewCtx, StepInfo>({
+      manual: createSyncFlow<StepInfo, ReviewCtx>({
         resolver: (step) => ({
           id: step.id,
           description: step.description,

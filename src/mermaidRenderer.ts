@@ -1,11 +1,7 @@
 import { getOwnEntries } from './utils.ts'
-import type { FlowStepInfo, StepStatus } from './structuredFlow.ts'
-import { FlowResult, StepBranchInfo, StepResult } from './structuredFlow.ts'
+import { FlowLike, FlowResult, FlowStepInfo, StepBranchInfo, StepResult, StepStatus } from './flowClasses.ts'
 
 type MermaidStepResult = StepResult<any, any>
-type FlowLike = {
-  steps: readonly FlowStepInfo[]
-}
 type MermaidRenderable = FlowLike | Pick<FlowResult<any>, 'status' | 'stepResults'>
 
 type RenderableBranch = {

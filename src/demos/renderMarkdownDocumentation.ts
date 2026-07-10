@@ -2,12 +2,10 @@ import { readFileSync, writeFileSync } from 'node:fs'
 
 import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
 import { getOwnEntries } from '../utils.ts'
-import type { FlowResult, FlowStepInfo } from '../structuredFlow.ts'
-import { StepBranchInfo } from '../structuredFlow.ts'
 import { renderProcessAsMermaidGraph } from '../mermaidRenderer.ts'
+import { FlowResult, FlowStepInfo, StepBranchInfo } from '../flowClasses.ts'
 
 type GeneratedBlockKind = 'json' | 'mermaid' | 'html-table'
-type MaybePromise<T> = T | Promise<T>
 type ConvertedStepResult = {
   id: string
   description?: string
@@ -29,9 +27,10 @@ type ConvertedFlowResult = {
   stepResults: ConvertedStepResult[]
 }
 
-type FlowLike<InitialCtx extends object> = {
+type FlowLike = {
   steps: readonly FlowStepInfo[]
-  run(initial: InitialCtx): MaybePromise<FlowResult<any>>
+  asyncMode: 'sync' | 'async'
+  run(initial: object): Promise<FlowResult<any>> | FlowResult<any>
 }
 
 type DocumentationDemo<InitialCtx extends object> = {
@@ -44,7 +43,7 @@ type DocumentationDemo<InitialCtx extends object> = {
 type DocumentationFlow<InitialCtx extends object> = {
   id: string
   sourceFile?: string
-  flow: FlowLike<InitialCtx>
+  flow: FlowLike
   title?: string
   description?: string
   demos?: readonly DocumentationDemo<InitialCtx>[]
@@ -99,7 +98,10 @@ type DocumentationSection<TFlows extends readonly AnyDocumentationFlow[]> =
   | HeadingSection
   | ParagraphSection
 
-type DocumentationFormatter<TNode extends FlowStepInfo = FlowStepInfo> = (node: TNode, flowId: string) => FormattedStepItem
+type DocumentationFormatter<TNode extends FlowStepInfo = FlowStepInfo> = (
+  node: TNode,
+  flowId: string
+) => FormattedStepItem
 
 type RenderMarkdownDocumentationOptions<
   TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
@@ -657,7 +659,7 @@ function renderTableStepLabel(
   ].join('')
 }
 
-function getBranchEntries(step: FlowStepInfo): Array<[PropertyKey, FlowLike<any>]> {
+function getBranchEntries(step: FlowStepInfo): Array<[PropertyKey, FlowLike]> {
   if (!(step instanceof StepBranchInfo)) {
     return []
   }
@@ -775,13 +777,13 @@ function renderDemoResultSection(
 }
 
 type LeafFlowEntry = {
-  flow: FlowLike<any>
+  flow: FlowLike
   referencedBy: DocumentationFlow<any>[]
 }
 
 function createNestedFlowExample(
   formatter: DocumentationFormatter | undefined,
-  flow: FlowLike<any>
+  flow: FlowLike
 ): DocumentationFlow<any> {
   const firstStep = flow.steps[0]
 
@@ -810,10 +812,10 @@ function createNestedFlowExample(
 
 function collectNestedFlows(flows: readonly DocumentationFlow<any>[]): LeafFlowEntry[] {
   const rootFlows = new Set(flows.map((flow) => flow.flow))
-  const nestedFlows = new Map<FlowLike<any>, LeafFlowEntry>()
+  const nestedFlows = new Map<FlowLike, LeafFlowEntry>()
 
   for (const flow of flows) {
-    const visited = new Set<FlowLike<any>>()
+    const visited = new Set<FlowLike>()
     const pending = [flow.flow]
 
     while (pending.length > 0) {
@@ -826,7 +828,7 @@ function collectNestedFlows(flows: readonly DocumentationFlow<any>[]): LeafFlowE
       visited.add(currentFlow)
 
       for (const step of currentFlow.steps) {
-        for (const branchFlow of Object.values(step instanceof StepBranchInfo ? step.branches : {}) as FlowLike<any>[]) {
+        for (const branchFlow of Object.values(step instanceof StepBranchInfo ? step.branches : {}) as FlowLike[]) {
           pending.push(branchFlow)
 
           if (rootFlows.has(branchFlow)) {
