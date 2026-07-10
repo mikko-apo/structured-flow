@@ -147,32 +147,6 @@ function applyStatusHandling(status: StepStatus, options?: StepOptionsStatusHand
   return status
 }
 
-function getOverallFlowStatus(result: Pick<FlowResult<any>, 'stepResults'>): StepStatus {
-  if (result.stepResults.length === 0) {
-    return 'ok'
-  }
-
-  if (result.stepResults.some((stepResult) => stepResult.status === 'exception')) {
-    return 'exception'
-  }
-
-  if (result.stepResults.some((stepResult) => stepResult.status === 'error')) {
-    return 'error'
-  }
-
-  const finalStepResult = [...result.stepResults].reverse().find((stepResult) => stepResult.status !== 'skip')
-
-  if (finalStepResult?.status === 'stop') {
-    return 'stop'
-  }
-
-  if (finalStepResult?.status === 'skip') {
-    return 'skip'
-  }
-
-  return finalStepResult == null ? 'skip' : 'ok'
-}
-
 function mergeStepStatuses(results: readonly StepStatus[]): StepStatus {
   if (results.length === 0) {
     return 'skip'
@@ -210,21 +184,6 @@ function normalizeBranchSelection<Key extends PropertyKey>(
   }
 
   return [selection as Key]
-}
-
-function createSkippedBranchResult<Ctx extends object>(
-  key: PropertyKey,
-  flow: Flow<Ctx, any, any>
-): BranchStepFlowResult {
-  return new BranchStepFlowResult(
-    key,
-    'skip',
-    flow.steps.map((step: StepInfo) => new StepResult(step, 'skip'))
-  )
-}
-
-function createBranchResult(key: PropertyKey, result: FlowResult<any>): BranchStepFlowResult {
-  return new BranchStepFlowResult(key, result.status, result.stepResults)
 }
 
 function createStepResult<TStep extends StepInfo>(
@@ -284,43 +243,42 @@ function runBranch<
 ): MaybePromise<StepResult<StepPayloadOf<ReturnType<TStep['fn']>>>> {
   const selection = normalizeBranchSelection(step.id, select(ctx))
 
-  if (isStepStatus(selection)) {
-    const skippedBranches = getOwnEntries(branches).map(([key, flow]) => createSkippedBranchResult(key, flow))
-    const status = applyStatusHandling(selection, step.options?.status)
-    const originalStatus = selection !== status ? selection : undefined
+  const selectedKeys = new Set<BranchKey<TBranches>>()
+
+  const createStepResultForBranch = (selectedBranchResults: BranchStepFlowResult[], rawStatus: StepStatus) => {
+    const skippedBranchResults = getOwnEntries(branches)
+      .filter(([key]) => !selectedKeys.has(key))
+      .map(
+        ([key, flow]) =>
+          new BranchStepFlowResult(
+            key,
+            'skip',
+            flow.steps.map((step: StepInfo) => new StepResult(step, 'skip'))
+          )
+      )
+    const status = applyStatusHandling(rawStatus, step.options?.status)
+    const originalStatus = rawStatus !== status ? rawStatus : undefined
     const branchStepResult = new StepResult<StepPayloadOf<ReturnType<TStep['fn']>>>(
       step,
       status,
       undefined,
-      [],
-      skippedBranches,
-      originalStatus
-    )
-
-    return mode === 'sync' ? branchStepResult : Promise.resolve(branchStepResult)
-  }
-
-  const selectedBranchKeys = [...selection]
-  const createBranchStepResult = (selectedBranchResults: BranchStepFlowResult[]) => {
-    const skippedBranchResults = getOwnEntries(branches)
-      .filter(([key]) => !selectedKeys.has(key))
-      .map(([key, flow]) => createSkippedBranchResult(key, flow))
-
-    const rawStatus = mergeStepStatuses(selectedBranchResults.map((branch) => branch.status))
-    const status = applyStatusHandling(rawStatus, step.options?.status)
-    const originalStatus = rawStatus !== status ? rawStatus : undefined
-
-    return new StepResult<StepPayloadOf<ReturnType<TStep['fn']>>>(
-      step,
-      status,
-      undefined,
-      selectedBranchKeys,
+      Array.from(selectedKeys),
       [...selectedBranchResults, ...skippedBranchResults],
       originalStatus
     )
+    return mode === 'sync' ? branchStepResult : Promise.resolve(branchStepResult)
   }
 
-  const selectedKeys = new Set<BranchKey<TBranches>>()
+  if (isStepStatus(selection)) {
+    return createStepResultForBranch([], selection)
+  }
+
+  const processBranchResults = (selectedBranchResults: BranchStepFlowResult[]) =>
+    createStepResultForBranch(
+      selectedBranchResults,
+      mergeStepStatuses(selectedBranchResults.map((branch) => branch.status))
+    )
+
   const runSelectedBranch = (key: BranchKey<TBranches>): MaybePromise<BranchStepFlowResult> => {
     assertValidBranchKey(step.id, key, branches)
     selectedKeys.add(key)
@@ -328,14 +286,17 @@ function runBranch<
     const result = branches[key].run(ctx)
 
     if (isPromise(result)) {
-      return result.then((resolvedResult) => createBranchResult(key, resolvedResult))
+      return result.then(
+        (resolvedResult) => new BranchStepFlowResult(key, resolvedResult.status, resolvedResult.stepResults)
+      )
     }
 
-    return createBranchResult(key, result)
+    return new BranchStepFlowResult(key, result.status, result.stepResults)
   }
 
+  const selectedBranchKeys = [...selection]
   if (mode === 'sync') {
-    const selectedBranchResults = selection.map((key) => {
+    const selectedBranchResults = selectedBranchKeys.map((key) => {
       const branchResult = runSelectedBranch(key)
 
       if (isPromise(branchResult)) {
@@ -345,14 +306,14 @@ function runBranch<
       return branchResult
     })
 
-    return createBranchStepResult(selectedBranchResults)
+    return processBranchResults(selectedBranchResults)
   }
 
-  return selection
+  return selectedBranchKeys
     .reduce<
       Promise<BranchStepFlowResult[]>
     >((promise, key) => promise.then((selectedBranchResults) => Promise.resolve(runSelectedBranch(key)).then((branchResult) => [...selectedBranchResults, branchResult])), Promise.resolve([]))
-    .then(createBranchStepResult)
+    .then(processBranchResults)
 }
 
 export class StepResult<TResult extends object = StepFnPayload> {
@@ -397,11 +358,11 @@ function executeFlow<Ctx extends object, Steps extends readonly StepInfo[] = [],
 
   const recordSkippedRemainingSteps = (startIndex: number) => {
     for (let index = startIndex; index < steps.length; index++) {
-      handleStepFnResultAndCheckIfShouldStop(steps[index], index, undefined, true)
+      handleResultAndCheckStop(steps[index], index, undefined, true)
     }
   }
 
-  const handleStepFnResultAndCheckIfShouldStop = (
+  const handleResultAndCheckStop = (
     step: Step<Steps>,
     index: number,
     result: StepResult<StepPayloadOf<ReturnType<Step<Steps>['fn']>>> | RawStepFnResult<Step<Steps>> | undefined,
@@ -434,15 +395,11 @@ function executeFlow<Ctx extends object, Steps extends readonly StepInfo[] = [],
             throw new Error(`Flow step "${step.id}" returned a Promise in sync build()`)
           }
 
-          if (handleStepFnResultAndCheckIfShouldStop(step, currentIndex, result)) {
+          if (handleResultAndCheckStop(step, currentIndex, result)) {
             break
           }
         } catch {
-          if (
-            handleStepFnResultAndCheckIfShouldStop(step, currentIndex, { status: 'exception' } as RawStepFnResult<
-              typeof step
-            >)
-          ) {
+          if (handleResultAndCheckStop(step, currentIndex, { status: 'exception' } as RawStepFnResult<typeof step>)) {
             break
           }
         }
@@ -453,9 +410,7 @@ function executeFlow<Ctx extends object, Steps extends readonly StepInfo[] = [],
 
     const step = steps[index]
     const continueAfterException = () => {
-      if (
-        !handleStepFnResultAndCheckIfShouldStop(step, index, { status: 'exception' } as RawStepFnResult<typeof step>)
-      ) {
+      if (!handleResultAndCheckStop(step, index, { status: 'exception' } as RawStepFnResult<typeof step>)) {
         return runSteps(index + 1)
       }
     }
@@ -463,14 +418,14 @@ function executeFlow<Ctx extends object, Steps extends readonly StepInfo[] = [],
     return Promise.resolve()
       .then(() => step.fn(ctx))
       .then((result) => {
-        if (!handleStepFnResultAndCheckIfShouldStop(step, index, result)) {
+        if (!handleResultAndCheckStop(step, index, result)) {
           return runSteps(index + 1)
         }
       })
       .catch(() => continueAfterException())
   }
 
-  const finalize = () => new FlowResult<Steps>(results, getOverallFlowStatus({ stepResults: results }))
+  const finalize = () => new FlowResult<Steps>(results, mergeStepStatuses(results.map((s) => s.status)))
 
   if (mode === 'sync') {
     runSteps(0)
@@ -592,7 +547,9 @@ class FlowBuilder<
 }
 
 function createDefaultResolver<Mode extends FlowMode>() {
-  return ((id: string) => ({ id })) as (id: string) => StepInfoResolution<object, Mode>
+  return function (id: string) {
+    return { id }
+  } as (id: string) => StepInfoResolution<object, Mode>
 }
 
 type CreateFlowFactory<Mode extends FlowMode> = {
