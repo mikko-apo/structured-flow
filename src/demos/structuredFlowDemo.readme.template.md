@@ -43,29 +43,29 @@ Structured flow gives you:
 type SubmittedForm = { id: string }
 type Occupancy = { id: string }
 
-function getOccupancies(_ctx: { form: SubmittedForm }) {
+function getOccupancies(_data: { form: SubmittedForm }) {
   return {
     occupancies: [] as Occupancy[],
   }
 }
 
-function verifyOccupancyCount(_ctx: { form: SubmittedForm; occupancies: Occupancy[] }) {
+function verifyOccupancyCount(_data: { form: SubmittedForm; occupancies: Occupancy[] }) {
   return stepResult({
     result: 'ok',
     info: 'Count looks good.',
   })
 }
 
-async function crossCheckFormAndOccupancies(_ctx: { form: SubmittedForm; occupancies: Occupancy[] }) {
+async function crossCheckFormAndOccupancies(_data: { form: SubmittedForm; occupancies: Occupancy[] }) {
   return stepResult({
     result: 'ok',
     info: 'Cross-check passed.',
   })
 }
 
-// Ctx is inferred from the first step function parameter. Here it becomes `{ form: SubmittedForm }`.
+// Data is inferred from the first step function parameter. Here it becomes `{ form: SubmittedForm }`.
 const validations = createAsyncFlow('IC10', 'Get linked occupancy records', getOccupancies)
-  // Fields returned from a step are added to the ctx for following steps when the result is `ok` or `stop`.
+  // Fields returned from a step are added to the data for following steps when the result is `ok` or `stop`.
   // `getOccupancies()` adds `occupancies`, so later steps receive `{ form, occupancies }`.
   .step('IC25', 'Count the recovered occupancy trail', verifyOccupancyCount)
   .step('IC30', 'Cross-check the submitted form against the occupancy trail', crossCheckFormAndOccupancies)
@@ -81,7 +81,7 @@ if (!result.ok) {
 
 ## Flow And Step Execution
 
-Each step receives the initial or acculated context object and each step function returns a `StepResult`.
+Each step receives the current data object and each step function returns a `StepResult`.
 
 `StepResult` contains the following fields:
 
@@ -92,11 +92,11 @@ Each step receives the initial or acculated context object and each step functio
     - `stop` means that the step failed and execution stops.
     - `skip` does not continue
 - `info` is copied into `stepResults`
-- other returned fields are added to the ctx
+- other returned fields are added to the data
 
 A branch step calls the selector function and can return one key, many keys, or a direct status like `skip`, `error`,
 `stop`, or
-`exception`. Child flows run from the parent ctx, but their ctx additions stay inside the branch result.
+`exception`. Child flows run from the parent data, but their data additions stay inside the branch result.
 
 A list step iterates the current ctx when it is an array. It supports:
 - `.list<State>(id, description, runItem)`

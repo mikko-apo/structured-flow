@@ -30,7 +30,8 @@ type ConvertedFlowResult = {
 type FlowLike = {
   steps: readonly FlowStepInfo[]
   asyncMode: 'sync' | 'async'
-  run(initial: object): Promise<FlowResult<any>> | FlowResult<any>
+  allowsContext: boolean
+  run(...args: [data: object] | [data: object, ctx: unknown]): Promise<FlowResult<any>> | FlowResult<any>
 }
 
 type DocumentationDemo<InitialCtx extends object> = {

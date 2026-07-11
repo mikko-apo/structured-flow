@@ -12,7 +12,7 @@ type SubmittedForm = {
   requiresManualReview: boolean
 }
 
-type ReviewCtx = {
+type ReviewData = {
   form: SubmittedForm
   checks: Array<'audit' | 'rules'>
 }
@@ -20,7 +20,7 @@ type ReviewCtx = {
 type StepInfo = {
   id: string
   description: string
-  fn?: (ctx: ReviewCtx) => Record<string, unknown> | Promise<Record<string, unknown>>
+  fn?: (data: ReviewData) => Record<string, unknown> | Promise<Record<string, unknown>>
 }
 
 /* CORE_API:START */
@@ -65,7 +65,7 @@ const reviewFlow = createSyncFlow({
     },
     ({ form }) => (form.requiresManualReview ? 'manual' : 'auto'),
     {
-      auto: createSyncFlow<StepInfo, ReviewCtx>({
+      auto: createSyncFlow<StepInfo, ReviewData>({
         resolver: (step) => ({
           id: step.id,
           description: step.description,
@@ -78,7 +78,7 @@ const reviewFlow = createSyncFlow({
           checksSeen: checks.length,
         }),
       }),
-      manual: createSyncFlow<StepInfo, ReviewCtx>({
+      manual: createSyncFlow<StepInfo, ReviewData>({
         resolver: (step) => ({
           id: step.id,
           description: step.description,

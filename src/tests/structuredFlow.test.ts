@@ -4,7 +4,7 @@ import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
 import { StepResult } from '../flowClasses'
 import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
 
-type PersonCtx = {
+type PersonData = {
   person: {
     id: string
     name: string
@@ -17,11 +17,11 @@ type PersonCtx = {
 type StepId = {
   id: string
   description: string
-  fn?: (ctx: PersonCtx) => Record<string, unknown> | Promise<Record<string, unknown>>
+  fn?: (data: PersonData) => Record<string, unknown> | Promise<Record<string, unknown>>
 }
 
 function createSyncBuilder() {
-  return createSyncFlow<StepId, PersonCtx>({
+  return createSyncFlow<StepId, PersonData>({
     resolver: (step) => ({
       id: step.id,
       description: step.description,
@@ -31,7 +31,7 @@ function createSyncBuilder() {
 }
 
 function createAsyncBuilder() {
-  return createAsyncFlow<StepId, PersonCtx>({
+  return createAsyncFlow<StepId, PersonData>({
     resolver: (step) => ({
       id: step.id,
       description: step.description,
@@ -41,6 +41,109 @@ function createAsyncBuilder() {
 }
 
 describe('structuredFlow core execution', () => {
+  it('passes a separate ctx to steps when the builder uses withContext()', () => {
+    type RequestCtx = {
+      actorId: string
+    }
+
+    const builder = createSyncFlow<StepId, PersonData>({
+      resolver: (step) => ({
+        id: step.id,
+        description: step.description,
+        stepFn: step.fn,
+      }),
+    }).withContext<RequestCtx>()
+
+    const flow = builder
+      .step(
+        {
+          id: 'CTX-1',
+          description: 'Uses request context',
+        },
+        (data, ctx) => ({
+          actorId: ctx.actorId,
+          personId: data.person.id,
+        })
+      )
+      .build()
+
+    const result = flow.run(
+      {
+        person: { id: 'p0', name: 'Ada', age: 31 },
+        route: 'approve',
+        checks: [],
+      },
+      { actorId: 'user-1' }
+    )
+
+    expect(result.status).toBe('ok')
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'ok',
+      stepResults: [{ id: 'CTX-1', result: { actorId: 'user-1', personId: 'p0' } }],
+    })
+
+    expectTypeOf<Parameters<typeof flow.run>>().toEqualTypeOf<[data: PersonData, ctx: RequestCtx]>()
+
+    // @ts-expect-error second parameter must match the configured ctx type
+    builder.step({ id: 'CTX-2', description: 'Invalid ctx' }, (data, ctx: { wrong: true }) => ({
+      actorId: String(ctx.wrong),
+      personId: data.person.id,
+    }))
+  })
+
+  it('rejects ctx at runtime when the flow does not use withContext()', () => {
+    const flow = createSyncBuilder()
+      .step(
+        {
+          id: 'CTX-RUN-1',
+          description: 'No ctx flow',
+        },
+        ({ person }) => ({
+          personId: person.id,
+        })
+      )
+      .build()
+
+    expect(() =>
+      (flow.run as (...args: any[]) => unknown)(
+        {
+          person: { id: 'p0', name: 'Ada', age: 31 },
+          route: 'approve',
+          checks: [],
+        },
+        { actorId: 'user-1' }
+      )
+    ).toThrow('Flow.run() expects only data when the flow does not use withContext()')
+  })
+
+  it('requires ctx at runtime when the flow uses withContext()', () => {
+    type RequestCtx = {
+      actorId: string
+    }
+
+    const flow = createSyncBuilder()
+      .withContext<RequestCtx>()
+      .step(
+        {
+          id: 'CTX-RUN-2',
+          description: 'Ctx flow',
+        },
+        ({ person }, ctx) => ({
+          actorId: ctx.actorId,
+          personId: person.id,
+        })
+      )
+      .build()
+
+    expect(() =>
+      (flow.run as (...args: any[]) => unknown)({
+        person: { id: 'p0', name: 'Ada', age: 31 },
+        route: 'approve',
+        checks: [],
+      })
+    ).toThrow('Flow.run() expects both data and ctx when the flow uses withContext()')
+  })
+
   it('uses resolver-provided step functions and keeps ctx stable', () => {
     const ageCheck: StepId = {
       id: 'AGE-1',

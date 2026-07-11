@@ -19,10 +19,15 @@ export type StepOptions = {
 
 type BranchSelectFnReturnValue<Key extends PropertyKey> = Key | readonly Key[] | StepStatus
 
-export class StepInfo<Id extends string = string, Ctx extends object = object, Result extends object = object> {
+export class StepInfo<
+  Id extends string = string,
+  Data extends object = object,
+  Result extends object = object,
+  Ctx = undefined,
+> {
   constructor(
     readonly id: Id,
-    readonly fn: (ctx: Expand<Ctx>) => MaybePromise<Result>,
+    readonly fn: (data: Expand<Data>, ctx: Ctx) => MaybePromise<Result>,
     readonly options?: StepOptions
   ) {}
 }
@@ -30,23 +35,25 @@ export class StepInfo<Id extends string = string, Ctx extends object = object, R
 export type FlowLike = {
   steps: readonly FlowStepInfo[]
   asyncMode: AsyncMode
+  allowsContext: boolean
 }
 
 export class StepBranchInfo<
   Id extends string = string,
-  Ctx extends object = object,
+  Data extends object = object,
   SelectedKey extends PropertyKey = PropertyKey,
+  Ctx = undefined,
   TBranches extends Record<PropertyKey, FlowLike> = Record<PropertyKey, FlowLike>,
 > {
   constructor(
     readonly id: Id,
-    readonly select: (ctx: Expand<Ctx>) => BranchSelectFnReturnValue<SelectedKey>,
+    readonly select: (data: Expand<Data>, ctx: Ctx) => BranchSelectFnReturnValue<SelectedKey>,
     readonly branches: TBranches,
     readonly options?: StepOptions
   ) {}
 }
 
-export type FlowStepInfo = StepInfo<any, any, any> | StepBranchInfo<any, any, any, any>
+export type FlowStepInfo = StepInfo<any, any, any, any> | StepBranchInfo<any, any, any, any, any>
 
 export class StepResult<TResult extends object = StepFnPayload, TStepInfo extends FlowStepInfo = FlowStepInfo> {
   constructor(

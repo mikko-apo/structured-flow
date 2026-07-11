@@ -4,7 +4,7 @@ import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
 import { BranchStepFlowResult, StepBranchInfo, StepResult } from '../flowClasses'
 import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
 
-type ReviewCtx = {
+type ReviewData = {
   route: 'approve' | 'reject'
   severity: 'low' | 'high'
   checks: Array<'audit' | 'rules'>
@@ -13,11 +13,11 @@ type ReviewCtx = {
 type StepMeta = {
   id: string
   description: string
-  fn?: (ctx: ReviewCtx) => Record<string, unknown> | Promise<Record<string, unknown>>
+  fn?: (data: ReviewData) => Record<string, unknown> | Promise<Record<string, unknown>>
 }
 
 function createSyncMetaFlow() {
-  return createSyncFlow<StepMeta, ReviewCtx>({
+  return createSyncFlow<StepMeta, ReviewData>({
     resolver: (step) => ({
       id: step.id,
       description: step.description,
@@ -27,7 +27,7 @@ function createSyncMetaFlow() {
 }
 
 function createAsyncMetaFlow() {
-  return createAsyncFlow<StepMeta, ReviewCtx>({
+  return createAsyncFlow<StepMeta, ReviewData>({
     resolver: (step) => ({
       id: step.id,
       description: step.description,
@@ -37,7 +37,184 @@ function createAsyncMetaFlow() {
 }
 
 describe('FlowBuilder.branch', () => {
-  it('uses resolver descriptions for branches and keeps child payloads out of the parent ctx', () => {
+  it('passes a separate ctx to branch select when the builder uses withContext()', () => {
+    type RequestCtx = {
+      allowReject: boolean
+    }
+
+    const builder = createSyncMetaFlow().withContext<RequestCtx>()
+    const approveFlow = builder.step({
+      id: 'APP-CTX-1',
+      description: 'Approve branch',
+      fn: ({ severity }) => ({
+        approvedSeverity: severity,
+      }),
+    })
+    const rejectFlow = builder.step({
+      id: 'REJ-CTX-1',
+      description: 'Reject branch',
+      fn: ({ severity }) => ({
+        rejectedSeverity: severity,
+      }),
+    })
+
+    const flow = builder
+      .branch(
+        {
+          id: 'ROUTE-CTX-1',
+          description: 'Route with ctx',
+        },
+        (data, ctx) => (ctx.allowReject && data.route === 'reject' ? 'reject' : 'approve'),
+        {
+          approve: approveFlow,
+          reject: rejectFlow,
+        }
+      )
+      .build()
+
+    const result = flow.run(
+      {
+        route: 'reject',
+        severity: 'high',
+        checks: [],
+      },
+      { allowReject: false }
+    )
+
+    expect(convertResultNode(result)).toMatchObject({
+      stepResults: [{ selectedBranchKeys: ['approve'] }],
+    })
+  })
+
+  it('allows non-context child flows inside a context flow', () => {
+    type RequestCtx = {
+      allowReject: boolean
+    }
+
+    const childFlow = createSyncMetaFlow().step({
+      id: 'NOCTX-1',
+      description: 'No ctx child',
+      fn: ({ severity }) => ({
+        severitySeen: severity,
+      }),
+    })
+
+    const flow = createSyncMetaFlow()
+      .withContext<RequestCtx>()
+      .branch(
+        {
+          id: 'ROUTE-NOCTX-1',
+          description: 'Route to no ctx child',
+        },
+        (data, ctx) => (ctx.allowReject && data.route === 'reject' ? 'reject' : 'approve'),
+        {
+          approve: childFlow,
+          reject: childFlow,
+        }
+      )
+      .build()
+
+    const result = flow.run(
+      {
+        route: 'approve',
+        severity: 'low',
+        checks: [],
+      },
+      { allowReject: true }
+    )
+
+    expect(result.status).toBe('ok')
+  })
+
+  it('rejects context child flows in non-context branches at runtime', () => {
+    type ChildCtx = {
+      actorId: string
+    }
+
+    const parentBuilder = createSyncMetaFlow()
+    const childFlow = createSyncMetaFlow()
+      .withContext<ChildCtx>()
+      .step(
+        {
+          id: 'CTX-CHILD-0',
+          description: 'Child with context',
+        },
+        ({ severity }, ctx) => ({
+          severitySeen: severity,
+          actorId: ctx.actorId,
+        })
+      )
+      .build()
+
+    expect(() =>
+      (parentBuilder.branch as (...args: any[]) => unknown)(
+        {
+          id: 'ROUTE-CTX-NOCTX-1',
+          description: 'No context parent',
+        },
+        () => 'approve',
+        {
+          approve: childFlow,
+        }
+      )
+    ).toThrow('Flow branch "ROUTE-CTX-NOCTX-1" cannot include context flow "approve" without withContext()')
+  })
+
+  it('rejects mismatched context flows in branch at type level', () => {
+    type ParentCtx = {
+      allowReject: boolean
+    }
+
+    type ChildCtx = {
+      actorId: string
+    }
+
+    const parentBuilder = createSyncMetaFlow().withContext<ParentCtx>()
+    const childFlow = createSyncMetaFlow()
+      .withContext<ChildCtx>()
+      .step(
+        {
+          id: 'CTX-CHILD-1',
+          description: 'Child with different context',
+        },
+        ({ severity }, ctx) => ({
+          severitySeen: severity,
+          actorId: ctx.actorId,
+        })
+      )
+      .build()
+
+    parentBuilder.branch(
+      {
+        id: 'ROUTE-CTX-MISMATCH-1',
+        description: 'Mismatch branch',
+      },
+      () => 'approve' as const,
+      {
+        // @ts-expect-error child context must match parent context type
+        approve: childFlow,
+      }
+    )
+  })
+
+  it('rejects mismatched data flows in branch at type level', () => {
+    const parentBuilder = createSyncMetaFlow()
+    const childFlow = createSyncFlow<{ other: string }>().build()
+
+    parentBuilder.branch(
+      {
+        id: 'ROUTE-DATA-MISMATCH-1',
+        description: 'Data mismatch branch',
+      },
+      () => 'approve' as const,
+      {
+        // @ts-expect-error child data must match parent data
+        approve: childFlow,
+      }
+    )
+  })
+
+  it('uses resolver descriptions for branches and keeps child payloads out of the parent data', () => {
     const approvedFlow = createSyncMetaFlow().step({
       id: 'APP-1',
       description: 'Approve request',
@@ -369,12 +546,12 @@ describe('FlowBuilder.branch', () => {
   it('infers the first-branch ctx from the selector', () => {
     const firstBranchFlow = createAsyncFlow(
       'FIRST-BRANCH',
-      ({ route }: Pick<ReviewCtx, 'route'>) => route,
+      ({ route }: Pick<ReviewData, 'route'>) => route,
       {
-        approve: createAsyncFlow<Pick<ReviewCtx, 'route'>>()
+        approve: createAsyncFlow<Pick<ReviewData, 'route'>>()
           .step('APP-FIRST', async () => ({ approved: true }), { description: 'Approve first branch' })
           .build(),
-        reject: createAsyncFlow<Pick<ReviewCtx, 'route'>>()
+        reject: createAsyncFlow<Pick<ReviewData, 'route'>>()
           .step('REJ-FIRST', async () => ({ rejected: true }), { description: 'Reject first branch' })
           .build(),
       },
@@ -382,6 +559,6 @@ describe('FlowBuilder.branch', () => {
     ).build()
 
     expect(firstBranchFlow.steps).toHaveLength(1)
-    expectTypeOf<Parameters<typeof firstBranchFlow.run>[0]>().toEqualTypeOf<Pick<ReviewCtx, 'route'>>()
+    expectTypeOf<Parameters<typeof firstBranchFlow.run>[0]>().toEqualTypeOf<Pick<ReviewData, 'route'>>()
   })
 })
