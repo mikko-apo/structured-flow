@@ -1,4 +1,14 @@
-import { StepBranchInfo, StepInfo, FlowStepInfo, FlowResult, StepOptions } from './flowClasses.ts'
+import {
+  BranchMapDataOptions,
+  BranchMapParamsOptions,
+  BranchStepOptions,
+  StepBranchInfo,
+  StepInfo,
+  FlowStepInfo,
+  FlowResult,
+  StepOptions,
+  StepStatus,
+} from './flowClasses.ts'
 import { asyncRun, syncRun } from './flowRun.ts'
 import { getOwnEntries } from './utils.ts'
 
@@ -6,7 +16,7 @@ type MaybePromise<T> = T | Promise<T>
 type AsyncMode = 'sync' | 'async'
 type Expand<T> = T extends infer O ? { [K in keyof O]: O[K] } : never
 
-type BranchSelectFnReturnValue<Key extends PropertyKey> = Key | readonly Key[] | import('./flowClasses.ts').StepStatus
+type BranchSelectFnReturnValue<Key extends PropertyKey> = Key | readonly Key[] | StepStatus
 
 type CompatibleBranchFlow<Data extends object, Ctx> =
   | Flow<Data, any, any, undefined>
@@ -97,6 +107,31 @@ type CreateFlowOptions<Data extends object, StepId, Mode extends AsyncMode> = St
   resolver?: StepInfoResolver<StepId, Data, Mode, any>
 }
 
+type AnyBranchOptions<Data extends object, Ctx, BranchData extends object, BranchCtx> =
+  | BranchStepOptions
+  | BranchMapDataOptions<Data, BranchData>
+  | BranchMapParamsOptions<Data, Ctx, BranchData, BranchCtx>
+
+type BranchMapParamsFn<Data extends object, Ctx> = (params: { data: Expand<Data>; ctx: Ctx }) => {
+  data?: object
+  ctx?: unknown
+}
+
+type InferBranchMapParamsData<
+  MapParams extends (...args: any[]) => any,
+  Data extends object,
+> = 'data' extends keyof ReturnType<MapParams>
+  ? Exclude<ReturnType<MapParams>['data'], undefined> extends infer BranchData extends object
+    ? BranchData
+    : Data
+  : Data
+
+type InferBranchMapParamsCtx<MapParams extends (...args: any[]) => any, Ctx> = 'ctx' extends keyof ReturnType<MapParams>
+  ? Exclude<ReturnType<MapParams>['ctx'], undefined> extends infer BranchCtx
+    ? BranchCtx
+    : Ctx
+  : Ctx
+
 type FlowRunResult<Steps extends readonly FlowStepInfo[], Mode extends 'sync' | 'async'> = Mode extends 'sync'
   ? FlowResult<Steps>
   : Promise<FlowResult<Steps>>
@@ -174,10 +209,10 @@ class FlowBuilder<
     )
   }
 
-  private resolveStep(stepId: StepId, options?: StepOptions) {
+  private resolveStep<TOptions extends StepOptions | undefined>(stepId: StepId, options?: TOptions) {
     const resolved = this.resolver(stepId)
     const description = options?.description ?? resolved.description
-    const mergedOptions = description === undefined ? options : { ...options, description }
+    const mergedOptions = (description === undefined ? options : { ...options, description }) as TOptions
 
     return {
       id: resolved.id,
@@ -230,11 +265,81 @@ class FlowBuilder<
     stepId: Ref,
     select: ValidateBranchSelect<Select, Data, Ctx, SelectedKey>,
     branches: TBranches,
-    options?: StepOptions
+    options?: BranchStepOptions
   ): FlowBuilder<
     Data,
     StepId,
-    [...Steps, StepBranchInfo<string, Data, SelectedKey, Ctx, NormalizedBranchFlows<TBranches>>],
+    [...Steps, StepBranchInfo<string, Data, SelectedKey, Ctx, NormalizedBranchFlows<TBranches>, Data, Ctx>],
+    Mode,
+    Ctx
+  >
+  branch<
+    Ref extends StepId,
+    SelectedKey extends PropertyKey,
+    BranchData extends object,
+    TBranches extends BranchFlowMap<BranchData, Ctx, SelectedKey>,
+    Select extends (...args: any[]) => any = (data: Data, ctx: Ctx) => BranchSelectFnReturnValue<SelectedKey>,
+  >(
+    stepId: Ref,
+    select: ValidateBranchSelect<Select, Data, Ctx, SelectedKey>,
+    branches: TBranches,
+    options: BranchMapDataOptions<Data, BranchData>
+  ): FlowBuilder<
+    Data,
+    StepId,
+    [...Steps, StepBranchInfo<string, Data, SelectedKey, Ctx, NormalizedBranchFlows<TBranches>, BranchData, Ctx>],
+    Mode,
+    Ctx
+  >
+  branch<
+    Ref extends StepId,
+    SelectedKey extends PropertyKey,
+    MapParams extends BranchMapParamsFn<Data, Ctx>,
+    TBranches extends BranchFlowMap<
+      InferBranchMapParamsData<MapParams, Data>,
+      InferBranchMapParamsCtx<MapParams, Ctx>,
+      SelectedKey
+    >,
+    Select extends (...args: any[]) => any = (data: Data, ctx: Ctx) => BranchSelectFnReturnValue<SelectedKey>,
+  >(
+    stepId: Ref,
+    select: ValidateBranchSelect<Select, Data, Ctx, SelectedKey>,
+    branches: TBranches,
+    options: StepOptions & { mapData?: never; mapParams: MapParams }
+  ): FlowBuilder<
+    Data,
+    StepId,
+    [
+      ...Steps,
+      StepBranchInfo<
+        string,
+        Data,
+        SelectedKey,
+        Ctx,
+        NormalizedBranchFlows<TBranches>,
+        InferBranchMapParamsData<MapParams, Data>,
+        InferBranchMapParamsCtx<MapParams, Ctx>
+      >,
+    ],
+    Mode,
+    Ctx
+  >
+  branch<
+    Ref extends StepId,
+    SelectedKey extends PropertyKey,
+    BranchData extends object,
+    BranchCtx,
+    TBranches extends BranchFlowMap<BranchData, BranchCtx, SelectedKey>,
+    Select extends (...args: any[]) => any = (data: Data, ctx: Ctx) => BranchSelectFnReturnValue<SelectedKey>,
+  >(
+    stepId: Ref,
+    select: ValidateBranchSelect<Select, Data, Ctx, SelectedKey>,
+    branches: TBranches,
+    options?: AnyBranchOptions<Data, Ctx, BranchData, BranchCtx>
+  ): FlowBuilder<
+    Data,
+    StepId,
+    [...Steps, StepBranchInfo<string, Data, SelectedKey, Ctx, NormalizedBranchFlows<TBranches>, BranchData, BranchCtx>],
     Mode,
     Ctx
   > {
@@ -247,8 +352,10 @@ class FlowBuilder<
           throw new Error(`Flow branch "${resolved.id}" cannot include async flow "${String(key)}" in sync mode`)
         }
 
-        if (!this.allowsContext && normalizedFlow.allowsContext) {
-          throw new Error(`Flow branch "${resolved.id}" cannot include context flow "${String(key)}" without withContext()`)
+        if (!this.allowsContext && options?.mapParams == null && normalizedFlow.allowsContext) {
+          throw new Error(
+            `Flow branch "${resolved.id}" cannot include context flow "${String(key)}" without withContext()`
+          )
         }
 
         return [key, normalizedFlow]
@@ -258,7 +365,15 @@ class FlowBuilder<
     return this.appendStep(
       new StepBranchInfo(
         resolved.id,
-        select as StepBranchInfo<string, Data, SelectedKey, Ctx>['select'],
+        select as StepBranchInfo<
+          string,
+          Data,
+          SelectedKey,
+          Ctx,
+          NormalizedBranchFlows<TBranches>,
+          BranchData,
+          BranchCtx
+        >['select'],
         normalizedBranches,
         resolved.options
       )
@@ -303,11 +418,61 @@ type CreateFlowFactory<Mode extends AsyncMode> = {
     id: StepId,
     select: ValidateBranchSelect<Select, Data, undefined, SelectedKey>,
     branches: TBranches,
-    config?: CreateFlowOptions<Data, StepId, Mode>
+    config?: BranchStepOptions
   ): FlowBuilder<
     Data,
     StepId,
-    [StepBranchInfo<string, Data, SelectedKey, undefined, NormalizedBranchFlows<TBranches>>],
+    [StepBranchInfo<string, Data, SelectedKey, undefined, NormalizedBranchFlows<TBranches>, Data, undefined>],
+    Mode
+  >
+  <
+    StepId,
+    SelectedKey extends PropertyKey,
+    BranchData extends object,
+    TBranches extends BranchFlowMap<BranchData, undefined, SelectedKey>,
+    Select extends (...args: any[]) => any = (data: any, ctx: any) => BranchSelectFnReturnValue<SelectedKey>,
+    Data extends object = Extract<StepInputData<Select>, object>,
+  >(
+    id: StepId,
+    select: ValidateBranchSelect<Select, Data, undefined, SelectedKey>,
+    branches: TBranches,
+    config: BranchMapDataOptions<Data, BranchData>
+  ): FlowBuilder<
+    Data,
+    StepId,
+    [StepBranchInfo<string, Data, SelectedKey, undefined, NormalizedBranchFlows<TBranches>, BranchData, undefined>],
+    Mode
+  >
+  <
+    StepId,
+    SelectedKey extends PropertyKey,
+    MapParams extends BranchMapParamsFn<Data, undefined>,
+    TBranches extends BranchFlowMap<
+      InferBranchMapParamsData<MapParams, Data>,
+      InferBranchMapParamsCtx<MapParams, undefined>,
+      SelectedKey
+    >,
+    Select extends (...args: any[]) => any = (data: any, ctx: any) => BranchSelectFnReturnValue<SelectedKey>,
+    Data extends object = Extract<StepInputData<Select>, object>,
+  >(
+    id: StepId,
+    select: ValidateBranchSelect<Select, Data, undefined, SelectedKey>,
+    branches: TBranches,
+    config: StepOptions & { mapData?: never; mapParams: MapParams }
+  ): FlowBuilder<
+    Data,
+    StepId,
+    [
+      StepBranchInfo<
+        string,
+        Data,
+        SelectedKey,
+        undefined,
+        NormalizedBranchFlows<TBranches>,
+        InferBranchMapParamsData<MapParams, Data>,
+        InferBranchMapParamsCtx<MapParams, undefined>
+      >,
+    ],
     Mode
   >
 }
@@ -343,7 +508,7 @@ function createFlow<Mode extends AsyncMode>(asyncMode: Mode, ...args: unknown[])
       string,
       (...args: any[]) => any,
       Record<PropertyKey, any>,
-      CreateFlowOptions<any, any, Mode>,
+      BranchStepOptions | BranchMapDataOptions<any, any> | BranchMapParamsOptions<any, any, any, any>,
     ]
 
     return (builder as any).branch(id, select, branches, options)

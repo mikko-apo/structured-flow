@@ -17,6 +17,26 @@ export type StepOptions = {
   status?: StepOptionsStatusHandling
 }
 
+export type BranchStepOptions = StepOptions & {
+  mapData?: never
+  mapParams?: never
+}
+
+export type BranchMapDataOptions<Data extends object, BranchData extends object> = StepOptions & {
+  mapData: (data: Expand<Data>) => BranchData
+  mapParams?: never
+}
+
+export type BranchMapParamsOptions<Data extends object, Ctx, BranchData extends object, BranchCtx> = StepOptions & {
+  mapData?: never
+  mapParams: (params: { data: Expand<Data>; ctx: Ctx }) => { data?: BranchData; ctx?: BranchCtx }
+}
+
+export type BranchOptions<Data extends object, Ctx, BranchData extends object, BranchCtx> =
+  | BranchStepOptions
+  | BranchMapDataOptions<Data, BranchData>
+  | BranchMapParamsOptions<Data, Ctx, BranchData, BranchCtx>
+
 type BranchSelectFnReturnValue<Key extends PropertyKey> = Key | readonly Key[] | StepStatus
 
 export class StepInfo<
@@ -44,12 +64,14 @@ export class StepBranchInfo<
   SelectedKey extends PropertyKey = PropertyKey,
   Ctx = undefined,
   TBranches extends Record<PropertyKey, FlowLike> = Record<PropertyKey, FlowLike>,
+  BranchData extends object = Data,
+  BranchCtx = Ctx,
 > {
   constructor(
     readonly id: Id,
     readonly select: (data: Expand<Data>, ctx: Ctx) => BranchSelectFnReturnValue<SelectedKey>,
     readonly branches: TBranches,
-    readonly options?: StepOptions
+    readonly options?: BranchOptions<Data, Ctx, BranchData, BranchCtx>
   ) {}
 }
 

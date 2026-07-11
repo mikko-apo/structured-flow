@@ -126,6 +126,133 @@ describe('FlowBuilder.branch', () => {
     expect(result.status).toBe('ok')
   })
 
+  it('maps branch data with mapData()', () => {
+    const childFlow = createSyncFlow<Pick<ReviewData, 'route'>>()
+      .step(
+        'MAP-DATA-CHILD-1',
+        ({ route }) => ({
+          routeSeen: route,
+        }),
+        { description: 'Uses mapped branch data' }
+      )
+      .build()
+
+    const flow = createSyncMetaFlow()
+      .branch(
+        {
+          id: 'MAP-DATA-1',
+          description: 'Map branch data',
+        },
+        ({ route }: ReviewData) => route,
+        {
+          approve: childFlow,
+          reject: childFlow,
+        },
+        {
+          mapData: ({ route }: ReviewData): Pick<ReviewData, 'route'> => ({ route }),
+        }
+      )
+      .build()
+
+    const result = flow.run({
+      route: 'approve',
+      severity: 'high',
+      checks: ['audit'],
+    })
+
+    expect(convertResultNode(result)).toMatchObject({
+      stepResults: [
+        {
+          id: 'MAP-DATA-1',
+          branches: [
+            {
+              key: 'approve',
+              stepResults: [{ id: 'MAP-DATA-CHILD-1', result: { routeSeen: 'approve' } }],
+            },
+            { key: 'reject', status: 'skip' },
+          ],
+        },
+      ],
+    })
+  })
+
+  it('uses original branch params for missing mapParams() fields', () => {
+    type ParentCtx = {
+      allowReject: boolean
+    }
+
+    type ChildCtx = {
+      actorId: string
+    }
+
+    const childFlow = createSyncMetaFlow()
+      .withContext<ChildCtx>()
+      .step(
+        {
+          id: 'MAP-PARAMS-CHILD-1',
+          description: 'Uses mapped branch params',
+        },
+        ({ route, severity }, ctx) => ({
+          routeSeen: route,
+          severitySeen: severity,
+          actorId: ctx.actorId,
+        }),
+      )
+      .build()
+
+    const flow = createSyncMetaFlow()
+      .withContext<ParentCtx>()
+      .branch(
+        {
+          id: 'MAP-PARAMS-1',
+          description: 'Map branch ctx only',
+        },
+        ({ route }: ReviewData) => route,
+        {
+          approve: childFlow,
+          reject: childFlow,
+        },
+        {
+          mapParams: ({ ctx }: { data: ReviewData; ctx: ParentCtx }): { ctx: ChildCtx } => {
+            // data is omitted on purpose; the branch keeps the original data
+            // when mapParams() does not provide a replacement.
+            void ctx.allowReject
+            return { ctx: { actorId: 'branch-actor' } }
+          },
+        }
+      )
+      .build()
+
+    const result = flow.run(
+      {
+        route: 'approve',
+        severity: 'low',
+        checks: [],
+      },
+      { allowReject: true }
+    )
+
+    expect(convertResultNode(result)).toMatchObject({
+      stepResults: [
+        {
+          id: 'MAP-PARAMS-1',
+          branches: [
+            {
+              key: 'approve',
+              stepResults: [
+                {
+                  id: 'MAP-PARAMS-CHILD-1',
+                  result: { routeSeen: 'approve', severitySeen: 'low', actorId: 'branch-actor' },
+                },
+              ],
+            },
+            { key: 'reject', status: 'skip' },
+          ],
+        },
+      ],
+    })
+  })
+
   it('rejects context child flows in non-context branches at runtime', () => {
     type ChildCtx = {
       actorId: string
@@ -210,6 +337,57 @@ describe('FlowBuilder.branch', () => {
       {
         // @ts-expect-error child data must match parent data
         approve: childFlow,
+      }
+    )
+  })
+
+  it('requires mapped branch data and ctx to match child flows at type level', () => {
+    type ChildCtx = {
+      actorId: string
+    }
+
+    const builder = createSyncMetaFlow().withContext<{ allowReject: boolean }>()
+    const childFlow = createSyncFlow<Pick<ReviewData, 'route'>>()
+      .withContext<ChildCtx>()
+      .build()
+
+    builder.branch(
+      {
+        id: 'MAP-TYPE-OK',
+        description: 'Mapped params branch',
+      },
+      ({ route }: ReviewData) => route,
+      {
+        approve: childFlow,
+      },
+      {
+        mapParams: ({
+          data,
+        }: {
+          data: ReviewData
+          ctx: { allowReject: boolean }
+        }): { data: Pick<ReviewData, 'route'>; ctx: ChildCtx } => ({
+          data: { route: data.route },
+          ctx: { actorId: 'ok' },
+        }),
+      }
+    )
+
+    builder.branch(
+      {
+        id: 'MAP-TYPE-FAIL',
+        description: 'Invalid mapped params branch',
+      },
+      ({ route }: ReviewData) => route,
+      {
+        // @ts-expect-error mapped child params must match the child flow
+        approve: childFlow,
+      },
+      {
+        mapParams: ({ data }: { data: ReviewData; ctx: { allowReject: boolean } }) => ({
+          data: { severity: data.severity },
+          ctx: { actorId: 'bad' },
+        }),
       }
     )
   })

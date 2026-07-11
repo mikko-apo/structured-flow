@@ -30,12 +30,16 @@ type ProcessingState = {
   steps: readonly FlowStepInfo[]
   index: number
   stepResults: StepResult<any, any>[]
+  data: object
+  ctx: unknown
   branchKey?: PropertyKey
   pendingBranch?: {
-    step: StepBranchInfo<any, any, any, any>
+    step: StepBranchInfo<any, any, any, any, any, any, any>
     selectedKeys: PropertyKey[]
     nextBranchIndex: number
     branchResults: BranchStepFlowResult[]
+    data: object
+    ctx: unknown
   }
 }
 
@@ -129,7 +133,7 @@ function createStepResult<TStep extends StepInfo>(step: TStep, result: RawStepFn
 }
 
 function createBranchStepResult(
-  step: StepBranchInfo<any, any, any, any>,
+  step: StepBranchInfo<any, any, any, any, any, any, any>,
   rawStatus: StepStatus,
   selectedKeys: PropertyKey[] = [],
   branchResults: BranchStepFlowResult[] = []
@@ -202,10 +206,25 @@ function finishStep(state: ProcessingState, stepResult: StepResult<any, any>) {
   state.index++
 }
 
+function getBranchParams(step: StepBranchInfo<any, any, any, any, any, any, any>, data: object, ctx: unknown) {
+  if (step.options?.mapParams != null) {
+    const mapped = step.options.mapParams({ data: data as any, ctx: ctx as any })
+
+    return {
+      data: 'data' in mapped ? mapped.data : data,
+      ctx: 'ctx' in mapped ? mapped.ctx : ctx,
+    }
+  }
+
+  if (step.options?.mapData != null) {
+    return { data: step.options.mapData(data as any), ctx }
+  }
+
+  return { data, ctx }
+}
+
 function travel(
-  processingStateList: ProcessingState[],
-  data: object,
-  ctx: unknown
+  processingStateList: ProcessingState[]
 ): { kind: 'step'; state: ProcessingState; step: StepInfo<any, any, any, any> } | { kind: 'done'; result: FlowResult<any> } {
   while (true) {
     const state = processingStateList[processingStateList.length - 1]
@@ -218,6 +237,8 @@ function travel(
           steps: branchFlow.steps,
           index: 0,
           stepResults: [],
+          data: state.pendingBranch.data,
+          ctx: state.pendingBranch.ctx,
           branchKey: key,
         })
         continue
@@ -260,7 +281,7 @@ function travel(
 
     if (step instanceof StepBranchInfo) {
       try {
-        const selection = normalizeBranchSelection(step.id, step.select(data as any, ctx as any))
+        const selection = normalizeBranchSelection(step.id, step.select(state.data as any, state.ctx as any))
 
         if (isStepStatus(selection)) {
           finishStep(state, createBranchStepResult(step, selection))
@@ -271,11 +292,14 @@ function travel(
           assertValidBranchKey(step.id, key, step.branches)
         }
 
+        const branchParams = getBranchParams(step, state.data, state.ctx)
         state.pendingBranch = {
           step,
           selectedKeys: [...selection],
           nextBranchIndex: 0,
           branchResults: [],
+          data: branchParams.data,
+          ctx: branchParams.ctx,
         }
       } catch {
         finishStep(state, createStepResultWithStatus(step, 'exception'))
@@ -293,16 +317,16 @@ export function syncRun<Data extends object, Steps extends readonly FlowStepInfo
   data: Data,
   ctx: unknown
 ): FlowResult<Steps> {
-  const processingStateList: ProcessingState[] = [{ steps, index: 0, stepResults: [] }]
+  const processingStateList: ProcessingState[] = [{ steps, index: 0, stepResults: [], data, ctx }]
 
   while (true) {
-    const current = travel(processingStateList, data, ctx)
+    const current = travel(processingStateList)
     if (current.kind === 'done') {
       return current.result as FlowResult<Steps>
     }
 
     try {
-      const result = current.step.fn(data as any, ctx as any)
+      const result = current.step.fn(current.state.data as any, current.state.ctx as any)
 
       if (isPromise(result)) {
         throw new Error(`Flow step "${current.step.id}" returned a Promise in sync run()`)
@@ -320,16 +344,19 @@ export async function asyncRun<Data extends object, Steps extends readonly FlowS
   data: Data,
   ctx: unknown
 ): Promise<FlowResult<Steps>> {
-  const processingStateList: ProcessingState[] = [{ steps, index: 0, stepResults: [] }]
+  const processingStateList: ProcessingState[] = [{ steps, index: 0, stepResults: [], data, ctx }]
 
   while (true) {
-    const current = travel(processingStateList, data, ctx)
+    const current = travel(processingStateList)
     if (current.kind === 'done') {
       return current.result as FlowResult<Steps>
     }
 
     try {
-      finishStep(current.state, ensureStepResult(current.step, await current.step.fn(data as any, ctx as any)))
+      finishStep(
+        current.state,
+        ensureStepResult(current.step, await current.step.fn(current.state.data as any, current.state.ctx as any))
+      )
     } catch {
       finishStep(current.state, createStepResultWithStatus(current.step, 'exception'))
     }
