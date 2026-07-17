@@ -1,9 +1,13 @@
 import { getOwnEntries } from './utils.ts'
 import {
+  type AnyStepMap,
   BranchStepFlowResult,
   FlowResult,
   type FlowLike,
   type FlowStepInfo,
+  type StepOptionsStatusHandling,
+  type StepPayloadOf,
+  type StepResultOf,
   StepBranchInfo,
   StepInfo,
   StepResult,
@@ -11,20 +15,7 @@ import {
   stepStatuses,
 } from './flowClasses.ts'
 
-type StepPayloadOf<Result> =
-  Awaited<Result> extends StepResult<infer Payload, any>
-    ? Payload
-    : Awaited<Result> extends object
-      ? Omit<Awaited<Result>, 'status'>
-      : Record<string, unknown>
-
 type RawStepFnResult<TStep extends StepInfo> = { status?: StepStatus } & Partial<StepPayloadOf<ReturnType<TStep['fn']>>>
-
-type StepResultOf<TStep extends FlowStepInfo> = TStep extends StepInfo
-  ? StepResult<StepPayloadOf<ReturnType<TStep['fn']>>, TStep>
-  : TStep extends StepBranchInfo
-    ? StepResult<Record<string, unknown>, TStep>
-    : never
 
 type ProcessingState = {
   steps: readonly FlowStepInfo[]
@@ -32,15 +23,22 @@ type ProcessingState = {
   stepResults: StepResult<any, any>[]
   data: object
   ctx: unknown
+  map?: AnyStepMap
   branchKey?: PropertyKey
   pendingBranch?: {
-    step: StepBranchInfo<any, any, any, any, any, any, any>
+    step: StepBranchInfo<any, any, any, any, any>
     selectedKeys: PropertyKey[]
     nextBranchIndex: number
     branchResults: BranchStepFlowResult[]
     data: object
     ctx: unknown
   }
+}
+
+type StepParams = {
+  data: object
+  ctx: unknown
+  mapped: boolean
 }
 
 const branchStatusPrecedence: Record<StepStatus, number> = {
@@ -59,7 +57,7 @@ function isPromise<T>(value: object): value is Promise<T> {
   return 'then' in value && typeof value.then === 'function'
 }
 
-function applyStatusHandling(status: StepStatus, options?: { error?: 'ignore' | 'exception'; exception?: 'error' }) {
+function applyStatusHandling(status: StepStatus, options?: StepOptionsStatusHandling) {
   if (status === 'error') {
     if (options?.error === 'ignore') {
       return 'ok'
@@ -112,6 +110,58 @@ function normalizeBranchSelection<Key extends PropertyKey>(
   return [selection as Key]
 }
 
+function applyMap(
+  map: AnyStepMap | undefined,
+  params: { id: unknown; data: object; ctx: unknown; stepOptions?: FlowStepInfo['options'] }
+): StepParams {
+  if (map == null) {
+    return { data: params.data, ctx: params.ctx, mapped: false }
+  }
+
+  return {
+    data: map({
+      id: params.id,
+      data: params.data,
+      ctx: params.ctx,
+      stepOptions: params.stepOptions,
+    }),
+    ctx: undefined,
+    mapped: true,
+  }
+}
+
+function getStepParams(step: FlowStepInfo, flowMap: AnyStepMap | undefined, data: object, ctx: unknown): StepParams {
+  const flowParams = applyMap(flowMap, { id: step.rawId, data, ctx, stepOptions: step.options })
+  const stepParams = applyMap(step.options?.map as AnyStepMap | undefined, {
+    id: step.rawId,
+    data: flowParams.data,
+    ctx: flowParams.ctx,
+    stepOptions: step.options,
+  })
+
+  return {
+    data: stepParams.data,
+    ctx: stepParams.ctx,
+    mapped: flowParams.mapped || stepParams.mapped,
+  }
+}
+
+function invokeStepFn<TStep extends StepInfo>(step: TStep, params: StepParams) {
+  if (params.mapped || params.ctx === undefined) {
+    return (step.fn as (data: any) => ReturnType<TStep['fn']>)(params.data as any)
+  }
+
+  return step.fn(params.data as any, params.ctx as any)
+}
+
+function invokeBranchSelect(step: StepBranchInfo<any, any, any, any, any>, params: StepParams) {
+  if (params.mapped || params.ctx === undefined) {
+    return (step.select as (data: any) => ReturnType<typeof step.select>)(params.data as any)
+  }
+
+  return step.select(params.data as any, params.ctx as any)
+}
+
 function createStepResult<TStep extends StepInfo>(step: TStep, result: RawStepFnResult<TStep> | undefined) {
   const resultLike: RawStepFnResult<TStep> = result ?? {}
   const rawStatus = resultLike.status ?? 'ok'
@@ -133,7 +183,7 @@ function createStepResult<TStep extends StepInfo>(step: TStep, result: RawStepFn
 }
 
 function createBranchStepResult(
-  step: StepBranchInfo<any, any, any, any, any, any, any>,
+  step: StepBranchInfo<any, any, any, any, any>,
   rawStatus: StepStatus,
   selectedKeys: PropertyKey[] = [],
   branchResults: BranchStepFlowResult[] = []
@@ -206,26 +256,11 @@ function finishStep(state: ProcessingState, stepResult: StepResult<any, any>) {
   state.index++
 }
 
-function getBranchParams(step: StepBranchInfo<any, any, any, any, any, any, any>, data: object, ctx: unknown) {
-  if (step.options?.mapParams != null) {
-    const mapped = step.options.mapParams({ data: data as any, ctx: ctx as any })
-
-    return {
-      data: 'data' in mapped ? mapped.data : data,
-      ctx: 'ctx' in mapped ? mapped.ctx : ctx,
-    }
-  }
-
-  if (step.options?.mapData != null) {
-    return { data: step.options.mapData(data as any), ctx }
-  }
-
-  return { data, ctx }
-}
-
 function travel(
   processingStateList: ProcessingState[]
-): { kind: 'step'; state: ProcessingState; step: StepInfo<any, any, any, any> } | { kind: 'done'; result: FlowResult<any> } {
+):
+  | { kind: 'step'; state: ProcessingState; step: StepInfo<any, any, any, any>; params: StepParams }
+  | { kind: 'done'; result: FlowResult<any> } {
   while (true) {
     const state = processingStateList[processingStateList.length - 1]
 
@@ -239,6 +274,7 @@ function travel(
           stepResults: [],
           data: state.pendingBranch.data,
           ctx: state.pendingBranch.ctx,
+          map: branchFlow.map,
           branchKey: key,
         })
         continue
@@ -278,10 +314,11 @@ function travel(
     }
 
     const step = state.steps[state.index]
+    const params = getStepParams(step, state.map, state.data, state.ctx)
 
     if (step instanceof StepBranchInfo) {
       try {
-        const selection = normalizeBranchSelection(step.id, step.select(state.data as any, state.ctx as any))
+        const selection = normalizeBranchSelection(step.id, invokeBranchSelect(step, params))
 
         if (isStepStatus(selection)) {
           finishStep(state, createBranchStepResult(step, selection))
@@ -292,14 +329,13 @@ function travel(
           assertValidBranchKey(step.id, key, step.branches)
         }
 
-        const branchParams = getBranchParams(step, state.data, state.ctx)
         state.pendingBranch = {
           step,
           selectedKeys: [...selection],
           nextBranchIndex: 0,
           branchResults: [],
-          data: branchParams.data,
-          ctx: branchParams.ctx,
+          data: params.data,
+          ctx: params.ctx,
         }
       } catch {
         finishStep(state, createStepResultWithStatus(step, 'exception'))
@@ -308,16 +344,16 @@ function travel(
       continue
     }
 
-    return { kind: 'step', state, step }
+    return { kind: 'step', state, step, params }
   }
 }
 
 export function syncRun<Data extends object, Steps extends readonly FlowStepInfo[]>(
-  steps: Steps,
+  flow: { steps: Steps; map?: AnyStepMap },
   data: Data,
   ctx: unknown
 ): FlowResult<Steps> {
-  const processingStateList: ProcessingState[] = [{ steps, index: 0, stepResults: [], data, ctx }]
+  const processingStateList: ProcessingState[] = [{ steps: flow.steps, index: 0, stepResults: [], data, ctx, map: flow.map }]
 
   while (true) {
     const current = travel(processingStateList)
@@ -326,7 +362,7 @@ export function syncRun<Data extends object, Steps extends readonly FlowStepInfo
     }
 
     try {
-      const result = current.step.fn(current.state.data as any, current.state.ctx as any)
+      const result = invokeStepFn(current.step, current.params)
 
       if (isPromise(result)) {
         throw new Error(`Flow step "${current.step.id}" returned a Promise in sync run()`)
@@ -340,11 +376,11 @@ export function syncRun<Data extends object, Steps extends readonly FlowStepInfo
 }
 
 export async function asyncRun<Data extends object, Steps extends readonly FlowStepInfo[]>(
-  steps: Steps,
+  flow: { steps: Steps; map?: AnyStepMap },
   data: Data,
   ctx: unknown
 ): Promise<FlowResult<Steps>> {
-  const processingStateList: ProcessingState[] = [{ steps, index: 0, stepResults: [], data, ctx }]
+  const processingStateList: ProcessingState[] = [{ steps: flow.steps, index: 0, stepResults: [], data, ctx, map: flow.map }]
 
   while (true) {
     const current = travel(processingStateList)
@@ -353,10 +389,7 @@ export async function asyncRun<Data extends object, Steps extends readonly FlowS
     }
 
     try {
-      finishStep(
-        current.state,
-        ensureStepResult(current.step, await current.step.fn(current.state.data as any, current.state.ctx as any))
-      )
+      finishStep(current.state, ensureStepResult(current.step, await invokeStepFn(current.step, current.params)))
     } catch {
       finishStep(current.state, createStepResultWithStatus(current.step, 'exception'))
     }

@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
 import { getOwnEntries } from '../utils.ts'
 import { renderProcessAsMermaidGraph } from '../mermaidRenderer.ts'
-import { FlowResult, FlowStepInfo, StepBranchInfo } from '../flowClasses.ts'
+import { type FlowResult, type FlowStepInfo, StepBranchInfo } from '../flowClasses.ts'
 
 type GeneratedBlockKind = 'json' | 'mermaid' | 'html-table'
 type ConvertedStepResult = {
@@ -37,6 +37,7 @@ type FlowLike = {
 type DocumentationDemo<InitialCtx extends object> = {
   id: string
   init: InitialCtx
+  ctx?: unknown
   title?: string
   description?: string
 }
@@ -739,15 +740,15 @@ function renderStaticFlowHtmlBlock(
 
 function renderDemoResultParts(
   markerId: string,
-  sequenceInit: unknown,
+  runInput: unknown,
   result: Pick<FlowResult<any>, 'status' | 'stepResults'>,
   convertedResult: ConvertedFlowResult,
   failedStepIds: string[]
 ) {
   return {
     initJson: [
-      '<p><strong>Initial JSON parameter</strong></p>',
-      renderJsonCodeBlock(`${markerId}-init`, sequenceInit),
+      '<p><strong>Initial flow.run() input</strong></p>',
+      renderJsonCodeBlock(`${markerId}-init`, runInput),
     ].join('\n'),
     resultJson: [
       '<p><strong>Resulting JSON</strong></p>',
@@ -763,12 +764,12 @@ function renderDemoResultParts(
 
 function renderDemoResultSection(
   markerId: string,
-  sequenceInit: unknown,
+  runInput: unknown,
   result: Pick<FlowResult<any>, 'status' | 'stepResults'>,
   convertedResult: ConvertedFlowResult,
   failedStepIds: string[]
 ): string {
-  const parts = renderDemoResultParts(markerId, sequenceInit, result, convertedResult, failedStepIds)
+  const parts = renderDemoResultParts(markerId, runInput, result, convertedResult, failedStepIds)
 
   return renderThreeColumnHtml(
     renderMarkdownPane([parts.initJson, '', parts.resultJson].join('\n')),
@@ -1231,9 +1232,10 @@ async function renderGeneratedExample(
 
   for (const rendered of demoRenders) {
     const markerId = replaceKeyToMarkerId(demoBase(flow.id, rendered.demo.id))
+    const runInput = rendered.demo.ctx === undefined ? rendered.demo.init : { data: rendered.demo.init, ctx: rendered.demo.ctx }
     const parts = renderDemoResultParts(
       markerId,
-      rendered.demo.init,
+      runInput,
       rendered.result,
       rendered.convertedResult,
       rendered.failedStepIds
@@ -1246,7 +1248,7 @@ async function renderGeneratedExample(
           anchorForDemoPart(formatter, flow, rendered.demo, 'full-table'),
           renderDemoResultSection(
             markerId,
-            rendered.demo.init,
+            runInput,
             rendered.result,
             rendered.convertedResult,
             rendered.failedStepIds
@@ -1295,7 +1297,7 @@ async function renderAllDemoRenders(
       flows.map(async (flow) => {
         const demoRenders = await Promise.all(
           (flow.demos ?? []).map(async (demo) => {
-            const result = await flow.flow.run(demo.init)
+            const result = demo.ctx === undefined ? await flow.flow.run(demo.init) : await flow.flow.run(demo.init, demo.ctx)
             const failedStepIds = collectFailedStepIds(result.stepResults)
             return {
               demo,

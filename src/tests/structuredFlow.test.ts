@@ -20,38 +20,60 @@ type StepId = {
   fn?: (data: PersonData) => Record<string, unknown> | Promise<Record<string, unknown>>
 }
 
+function resolveStepMeta({
+  id,
+  description,
+}: {
+  id: StepId
+  description?: string
+}) {
+  return {
+    id: id.id,
+    description: description ?? id.description,
+  }
+}
+
 function createSyncBuilder() {
   return createSyncFlow<StepId, PersonData>({
-    resolver: (step) => ({
-      id: step.id,
-      description: step.description,
-      stepFn: step.fn,
-    }),
+    resolver: resolveStepMeta,
   })
 }
 
 function createAsyncBuilder() {
   return createAsyncFlow<StepId, PersonData>({
-    resolver: (step) => ({
-      id: step.id,
-      description: step.description,
-      stepFn: step.fn,
-    }),
+    resolver: resolveStepMeta,
   })
 }
 
 describe('structuredFlow core execution', () => {
+  it('stores flow metadata from the flow options', () => {
+    const flow = createSyncFlow<StepId, PersonData>({
+      name: 'Person Review',
+      description: 'Checks person review steps',
+      resolver: resolveStepMeta,
+    })
+      .step(
+        {
+          id: 'NAME-0',
+          description: 'No-op',
+        },
+        ({ person }) => ({
+          personId: person.id,
+        })
+      )
+      .build()
+
+    expect(flow.name).toBe('Person Review')
+    expect(flow.description).toBe('Checks person review steps')
+  })
+
   it('passes a separate ctx to steps when the builder uses withContext()', () => {
     type RequestCtx = {
       actorId: string
     }
 
     const builder = createSyncFlow<StepId, PersonData>({
-      resolver: (step) => ({
-        id: step.id,
-        description: step.description,
-        stepFn: step.fn,
-      }),
+      resolver: resolveStepMeta,
     }).withContext<RequestCtx>()
 
     const flow = builder
@@ -197,6 +219,45 @@ describe('structuredFlow core execution', () => {
           },
         },
       ],
+    })
+  })
+
+  it('allows a step-level resolver to override flow-level metadata resolution', () => {
+    const overrideResolver = ({ id }: { id: StepId; description?: string }) => ({
+      id: `STEP-${id.id}`,
+      description: 'Step-level override',
+    })
+
+    const flow = createSyncFlow<StepId, PersonData>({
+      resolver: ({ id, description }) => ({
+        id: `FLOW-${id.id}`,
+        description: (description ?? id.description).toUpperCase(),
+      }),
+    })
+      .step(
+        {
+          id: 'OVERRIDE-1',
+          description: 'Original description',
+        },
+        ({ person }) => ({
+          seen: person.id,
+        }),
+        {
+          resolver: overrideResolver,
+        }
+      )
+      .build()
+
+    const result = flow.run({
+      person: { id: 'p1b', name: 'Ada', age: 31 },
+      route: 'approve',
+      checks: [],
+    })
+
+    expect(flow.steps).toMatchObject([{ id: 'STEP-OVERRIDE-1', options: { description: 'Step-level override' } }])
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'ok',
+      stepResults: [{ id: 'STEP-OVERRIDE-1', description: 'Step-level override', status: 'ok', result: { seen: 'p1b' } }],
     })
   })
 
@@ -392,7 +453,7 @@ describe('structuredFlow core execution', () => {
       status: 'ok',
       stepResults: [{ id: 'CONVERT-1', description: 'Attach description', status: 'ok', result: { seen: true } }],
     })
-    expect(result.stepResults[0].result).toEqual({ seen: true })
+    expect((result.stepResults[0] as StepResult<any, any>).result).toEqual({ seen: true })
     expect(collectFailedStepIds(result.stepResults)).toEqual([])
   })
 

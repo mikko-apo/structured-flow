@@ -2,7 +2,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
-import { h1, p, writeMarkdownDocumentation } from './renderMarkdownDocumentation.ts'
+import { writeMarkdownDocumentation } from './renderMarkdownDocumentation.ts'
 
 const documentationSourceFile = fileURLToPath(import.meta.url)
 
@@ -17,10 +17,53 @@ type ReviewData = {
   checks: Array<'audit' | 'rules'>
 }
 
+type MetadataFlowData = {
+  form: SubmittedForm
+}
+
+type ContextFlowData = {
+  form: SubmittedForm
+}
+
+type ContextFlowCtx = {
+  actorId: string
+  role: 'reviewer' | 'admin'
+}
+
+type MapFlowData = {
+  form: SubmittedForm
+  checks: Array<'audit' | 'rules'>
+  summary?: string
+}
+
+type MapFlowMapper = (params: {
+  id: string
+  data: MapFlowData
+  ctx: undefined
+}) => {
+  submissionId: string
+  occupancyCount: number
+  requiresManualReview: boolean
+  summary?: string
+}
+
 type StepInfo = {
   id: string
   description: string
   fn?: (data: ReviewData) => Record<string, unknown> | Promise<Record<string, unknown>>
+}
+
+function resolveStepMeta({
+  id,
+  description,
+}: {
+  id: StepInfo
+  description?: string
+}) {
+  return {
+    id: id.id,
+    description: description ?? id.description,
+  }
 }
 
 /* CORE_API:START */
@@ -43,13 +86,73 @@ const loadOccupancies = createAsyncFlow(
   .build()
 /* CORE_API:END */
 
-/* RESOLVER_FLOW:START */
-const reviewFlow = createSyncFlow({
-  resolver: (step: StepInfo) => ({
-    id: step.id,
-    description: step.description,
-    stepFn: step.fn,
+/* FLOW_METADATA:START */
+const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
+  name: 'Named Review Flow',
+  description: 'Demonstrates flow-level name and description metadata.',
+})
+  .step(
+    'META-10',
+    ({ form }) => ({
+      reviewTarget: form.id,
+    }),
+    { description: 'Record the form id as the review target' }
+  )
+  .build()
+/* FLOW_METADATA:END */
+
+/* CONTEXT_FLOW:START */
+const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
+  name: 'Actor-aware Review',
+  description: 'Demonstrates withContext() and flow.run(data, ctx).',
+})
+  .withContext<ContextFlowCtx>()
+  .step(
+    'CTX-10',
+    ({ form }, ctx) => ({
+      actorLabel: `${ctx.role}:${ctx.actorId}`,
+      reviewTarget: form.id,
+    }),
+    { description: 'Attach actor context to the review' }
+  )
+  .build()
+/* CONTEXT_FLOW:END */
+
+/* MAP_FLOW:START */
+const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
+  name: 'Mapped Review Flow',
+  description: 'Demonstrates flow-level map() payload remapping.',
+  map: ({ data }) => ({
+    submissionId: data.form.id,
+    occupancyCount: data.form.occupantCount,
+    requiresManualReview: data.form.requiresManualReview,
+    summary: data.summary,
   }),
+})
+  .step(
+    'MAP-10',
+    ({ submissionId, occupancyCount }) => ({
+      summary: `${submissionId}:${occupancyCount}`,
+    }),
+    { description: 'Use the flow-level mapped payload' }
+  )
+  .step(
+    'MAP-20',
+    ({ summary, requiresManualReview }) =>
+      stepResult({
+        status: requiresManualReview ? 'error' : 'ok',
+        info: requiresManualReview ? `Escalate ${summary ?? 'missing-summary'}` : `Auto-approve ${summary ?? 'missing-summary'}`,
+      }),
+    {
+      description: 'Use the same mapped payload after step output has updated the flow data',
+    }
+  )
+  .build()
+/* MAP_FLOW:END */
+
+/* RESOLVER_FLOW:START */
+const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
+  resolver: resolveStepMeta,
 })
   .step({
     id: 'VALIDATE-1',
@@ -66,11 +169,7 @@ const reviewFlow = createSyncFlow({
     ({ form }) => (form.requiresManualReview ? 'manual' : 'auto'),
     {
       auto: createSyncFlow<StepInfo, ReviewData>({
-        resolver: (step) => ({
-          id: step.id,
-          description: step.description,
-          stepFn: step.fn,
-        }),
+        resolver: resolveStepMeta,
       }).step({
         id: 'AUTO-1',
         description: 'Auto approve',
@@ -79,11 +178,7 @@ const reviewFlow = createSyncFlow({
         }),
       }),
       manual: createSyncFlow<StepInfo, ReviewData>({
-        resolver: (step) => ({
-          id: step.id,
-          description: step.description,
-          stepFn: step.fn,
-        }),
+        resolver: resolveStepMeta,
       }).step({
         id: 'MANUAL-1',
         description: 'Send to manual review',
@@ -103,6 +198,7 @@ export async function writeStructuredProcessExampleMarkdown(
 ) {
   await writeMarkdownDocumentation({
     documentationSourceFile,
+    templateFile: join(dirname(fileURLToPath(import.meta.url)), 'structuredFlowDemo.readme.template.md'),
     outputFile,
     printReport: true,
     formatter: (node) => ({
@@ -123,6 +219,43 @@ export async function writeStructuredProcessExampleMarkdown(
         ],
       },
       {
+        id: 'FLOW_METADATA',
+        title: 'Flow metadata',
+        description: 'Flow configured with a name and description.',
+        flow: namedReviewFlow,
+        demos: [
+          {
+            id: 'ok',
+            init: { form: { id: 'meta-200', occupantCount: 2, requiresManualReview: false } },
+          },
+        ],
+      },
+      {
+        id: 'CONTEXT_FLOW',
+        title: 'Context-aware flow',
+        description: 'Flow using withContext() so flow.run(data, ctx) passes a separate context object.',
+        flow: actorAwareFlow,
+        demos: [
+          {
+            id: 'reviewer',
+            init: { form: { id: 'ctx-200', occupantCount: 2, requiresManualReview: false } },
+            ctx: { actorId: 'user-7', role: 'reviewer' },
+          },
+        ],
+      },
+      {
+        id: 'MAP_FLOW',
+        title: 'Mapped payload flow',
+        description: 'Flow using flow-level and step-level map() to reshape callback payloads.',
+        flow: mappedReviewFlow,
+        demos: [
+          {
+            id: 'manual',
+            init: { form: { id: 'map-400', occupantCount: 1, requiresManualReview: true }, checks: ['rules'] },
+          },
+        ],
+      },
+      {
         id: 'RESOLVER_FLOW',
         title: 'Resolver-based flow',
         description: 'Flow created with resolver so step ids carry their own description and optional step fn.',
@@ -137,19 +270,6 @@ export async function writeStructuredProcessExampleMarkdown(
           },
         ],
       },
-    ],
-    pageContent: [
-      h1('Core API'),
-      p(
-        "const validations = createAsyncFlow('IC10', async ({ form }) => ({ occupancyCount: form.occupantCount }), { description: 'Get linked occupancy records' })"
-      ),
-      p("const result = await validations.run({form: {id: '200', occupantCount: 2, requiresManualReview: false}})"),
-      h1('Resolver Flow'),
-      p(
-        'createSyncFlow({ resolver }).step(stepInfo) resolves id, description, and an optional default step function from the step info object.'
-      ),
-      'ALL_FLOWS_HTML_MERMAID',
-      'LEAF_FLOWS_HTML',
     ],
   })
 }

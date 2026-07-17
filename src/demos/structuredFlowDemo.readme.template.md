@@ -1,220 +1,195 @@
 # structured-flow
 
-Model business rules or validation steps with code in a structured way.
+Model business rules and validation pipelines with typed steps, branches, and execution results.
 
 Structured flow gives you:
 
-- A way to define a flow of steps with a human-readable API and descriptions
-- API that enforces correctness over hundreds of rules and prevents errors
-- Ready made tools to visualize and document the flow and its execution
-    - Mermaid graphs: the flow and flow results
-    - Markdown HTML tables
-- Evidence of processesed rules
-- Simple API for modeling complex structures
-- Full type enforcement: types are enforced for rule functions and flows
-- Promotes splitting the program code in to smaller functions. Instead of a deep nested validation logic, there's small
-  functions that are called by the flow
+- Step-by-step execution with readable ids and descriptions
+- Typed `data` and optional `ctx` across the whole flow
+- Branching into child flows without leaking child payloads back to the parent flow
+- Recorded execution results that can be rendered as HTML tables or Mermaid graphs
+- Metadata hooks for step ids and descriptions through `resolver`
+- Runtime payload remapping through `map`
 
-<!-- TOC -->
-
-* [Core API](#core-api)
-    * [Flow And Step Execution](#flow-and-step-execution)
-    * [Handling results](#handling-results)
-    * [Rendering results](#rendering-results)
-* [Code examples](#code-examples)
-    * [Structured StepDescription](#structured-stepdescription)
-    * [Step results and execution visualized](#step-results-and-execution-visualized)
-        * [Flow](#flow)
-        * [Static Graph](#static-graph)
-        * [Passing Demo](#passing-demo)
-        * [Failing Demo](#failing-demo)
-        * [Stop Demo](#stop-demo)
-        * [Exception Demo](#exception-demo)
-    * [branch() examples](#branch-examples)
-        * [One Of Three Branches](#one-of-three-branches)
-        * [Two Of Three Branches](#two-of-three-branches)
-        * [Nested Branch](#nested-branch)
-        * [Skipped Branch](#skipped-branch)
-<!-- TOC -->
+{{TOC}}
 
 # Core API
 
+## Factory variants
+
+`createSyncFlow()` and `createAsyncFlow()` support a few shapes:
+
 ```ts
-type SubmittedForm = { id: string }
-type Occupancy = { id: string }
+createSyncFlow<Data>()
+createAsyncFlow<Data>()
 
-function getOccupancies(_data: { form: SubmittedForm }) {
-  return {
-    occupancies: [] as Occupancy[],
+createSyncFlow<StepId, Data>({
+  name,
+  description,
+  resolver,
+  map,
+})
+
+createSyncFlow(stepId, stepFn, stepOptions?)
+createAsyncFlow(stepId, stepFn, stepOptions?)
+
+createSyncFlow(branchId, select, branches, stepOptions?)
+createAsyncFlow(branchId, select, branches, stepOptions?)
+```
+
+Use the empty generic form when your first `step()` should define the flow. Use the config form when you want flow-level
+metadata or typed object step ids. Use the positional forms for short one-step or one-branch flows.
+
+## Flow options
+
+Flow config currently supports:
+
+- `name?: string`: stored on the built flow as metadata
+- `description?: string`: stored on the built flow as metadata
+- `resolver?: ({ id, description }) => ({ id, description? })`: resolves metadata for object-valued step ids
+- `map?: ({ id, data, ctx, stepOptions }) => object`: remaps the payload passed to step and branch callbacks
+
+`resolver` is metadata-only. It does not change runtime payloads. `map` is runtime-only. It changes what the step
+function or branch selector receives.
+
+## Step and branch options
+
+`step()` and `branch()` both accept `StepOptions`:
+
+```ts
+{
+  description?: string
+  status?: {
+    error?: 'ignore' | 'exception'
+    exception?: 'error'
   }
-}
-
-function verifyOccupancyCount(_data: { form: SubmittedForm; occupancies: Occupancy[] }) {
-  return stepResult({
-    result: 'ok',
-    info: 'Count looks good.',
-  })
-}
-
-async function crossCheckFormAndOccupancies(_data: { form: SubmittedForm; occupancies: Occupancy[] }) {
-  return stepResult({
-    result: 'ok',
-    info: 'Cross-check passed.',
-  })
-}
-
-// Data is inferred from the first step function parameter. Here it becomes `{ form: SubmittedForm }`.
-const validations = createAsyncFlow('IC10', 'Get linked occupancy records', getOccupancies)
-  // Fields returned from a step are added to the data for following steps when the result is `ok` or `stop`.
-  // `getOccupancies()` adds `occupancies`, so later steps receive `{ form, occupancies }`.
-  .step('IC25', 'Count the recovered occupancy trail', verifyOccupancyCount)
-  .step('IC30', 'Cross-check the submitted form against the occupancy trail', crossCheckFormAndOccupancies)
-  .build()
-
-// run() returns `FlowResult` which can be used to inspect the results
-const result = await validations.run({form: {id: '200'}})
-
-if (!result.ok) {
-  throw new Error(`Validation failed: ${result.failedStepIds().join(', ')}`)
+  resolver?: ({ id, description }) => ({ id, description? })
+  map?: ({ id, data, ctx, stepOptions }) => object
 }
 ```
 
-## Flow And Step Execution
+The flow-level resolver runs by default. A step-level or branch-level resolver can override the metadata for that node.
+The flow-level `map` runs before a step-level or branch-level `map`.
 
-Each step receives the current data object and each step function returns a `StepResult`.
+## Runtime behavior
 
-`StepResult` contains the following fields:
+- Without `map`, a callback is invoked as `fn(data)` or `fn(data, ctx)`
+- With `map`, a callback is invoked as `fn(mappedPayload)`
+- `withContext<Ctx>()` enables `flow.run(data, ctx)` and types downstream callbacks accordingly
+- `stepResult({ status, ...payload })` records status and keeps non-status fields as result payload
 
-- `result` controls execution of the flow and the execution of the following steps
-    - `ok` or undefined mean that the step was completed successfully.
-    - `error` means that the step failed and execution continues.
-    - Thrown errors are recorded as `exception`m but exception can be returned with code also
-    - `stop` means that the step failed and execution stops.
-    - `skip` does not continue
-- `info` is copied into `stepResults`
-- other returned fields are added to the data
+Status handling:
 
-A branch step calls the selector function and can return one key, many keys, or a direct status like `skip`, `error`,
-`stop`, or
-`exception`. Child flows run from the parent data, but their data additions stay inside the branch result.
+- `ok` or omitted: continue and merge returned fields into downstream data
+- `error`: record failure and continue
+- `stop`: stop execution and mark remaining steps as `skip`
+- `exception`: recorded when a step throws, unless remapped through `status.exception`
+- `skip`: record a skipped result
 
-A list step iterates the current ctx when it is an array. It supports:
-- `.list<State>(id, description, runItem)`
-- `.list<State>(id, description, flow)`
-- `.list<State>(id, description, mapItem, flow)`
+## Result model
 
-Function mode receives `{ ctx, item, state? }`. Flow mode passes `{ ctx, item, state? }` to the child flow. Mapper mode can
-return `true`, `false`, `undefined`, or a mapped object with `item`, optional `ctx`, optional `state`, and optional immediate
-`result`/`info`.
+`flow.run(...)` returns `FlowResult`.
 
-The table below shows how each recorded `result` affects execution and ctx updates:
+- `result.status` is the overall flow status
+- `result.stepResults` contains recorded `StepResult` entries in execution order
+- branch steps include `selectedBranchKeys` and nested `branches`
+- helper utilities such as `collectFailedStepIds()` and `convertResultNode()` can flatten or normalize result inspection
 
-| Result value      | Step executed | Flow continues | Returned fields added to context | Remaining steps auto-recorded as `skip` |
-|-------------------|---------------|----------------|----------------------------------|-----------------------------------------|
-| `ok` or undefined | yes           | yes            | yes                              | no                                      |
-| `error`           | yes           | yes            | no                               | no                                      |
-| `stop`            | yes           | no             | yes                              | yes                                     |
-| `exception`       | yes           | no             | no                               | yes                                     |
-| `skip`            | sometimes     | yes            | no                               | no                                      |
+# Examples
 
-## Handling results
+## Core API Example
 
-- `FlowResult` exposes `ok`, `finalCtx`, `stepResults`, and `failedStepIds()`.
-- Use `result.ok` for the top-level pass/fail check.
-- `result.failedStepIds()` returns failed ids from the main flow and nested branch flows.
-- `result.failedStepIds({ branchPrefix: true })` prefixes nested branch failures with their parent branch step ids.
-- Each `stepResult` records `id`, `result`, optional `info`, optional `addToCtx`, and optional nested `branches`.
-- `result.enrichResult()` returns an enriched results object which contains the step's `description` to each recorded
-  step result, including nested branch results.
+This example uses the short positional form. The first step infers the flow input type and later steps build on the
+returned data.
 
-## Rendering results
+{{CORE_API_CODE_BLOCK}}
 
-- `renderProcessAsMermaidGraph(flow)` renders a static graph from a builder or built flow.
-- `renderProcessAsMermaidGraph(result)` renders an executed graph with step statuses and `info`.
+### Flow Layout
 
-# Code examples
-
-## Structured StepDescription
-
-This example uses an object-valued `StepDescription` for both `step()` and `branch()`. The generated JSON below shows
-the stored flow definition.
-
-{{STRUCTURED_STEP_DESCRIPTION_CODE_BLOCK}}
-
-<p><strong>Internal flow configuration JSON</strong></p>
-
-{{STRUCTURED_STEP_DESCRIPTION_FLOW_JSON}}
-
-{{STRUCTURED_STEP_DESCRIPTION_DEMO_FULL_TABLE}}
-
-## Step results and execution visualized
-
-### Flow
-
-This is the source flow used by the graph and run examples below.
-
-{{SEQUENCE_CODE_BLOCK}}
+{{CORE_API_FLOW_HTML}}
 
 ### Static Graph
 
-This is the same flow before execution.
+{{CORE_API_STATIC_GRAPH}}
 
-{{SEQUENCE_STATIC_GRAPH}}
+### Example Run
 
-### Passing Demo
+{{CORE_API_ok_FULL_TABLE}}
 
-Happy path: every step runs and the flow ends with `ok`.
+## Flow Metadata Example
 
-{{SEQUENCE_PASSING_FULL_TABLE}}
+This flow is created with flow-level `name` and `description`. Those values are stored on the built flow and can be used
+by surrounding tooling or documentation.
 
-### Failing Demo
+{{FLOW_METADATA_CODE_BLOCK}}
 
-A step returns `error`. Execution continues, but the overall result is failed.
+### Flow Layout
 
-{{SEQUENCE_FAILING_FULL_TABLE}}
+{{FLOW_METADATA_FLOW_HTML}}
 
-### Stop Demo
+### Static Graph
 
-A step returns `stop`, so later steps are recorded as `skip`.
+{{FLOW_METADATA_STATIC_GRAPH}}
 
-{{SEQUENCE_STOP_FULL_TABLE}}
+### Example Run
 
-### Exception Demo
+{{FLOW_METADATA_ok_FULL_TABLE}}
 
-An exception ends the flow immediately and marks the rest as `skip`.
+## Context Example
 
-{{SEQUENCE_EXCEPTION_FULL_TABLE}}
+This flow uses `withContext()` so `flow.run(data, ctx)` passes a separate context object to each step callback.
 
-## branch() examples
+{{CONTEXT_FLOW_CODE_BLOCK}}
 
-### One Of Three Branches
+### Flow Layout
 
-Selector returns one branch key.
+{{CONTEXT_FLOW_FLOW_HTML}}
 
-{{BRANCH_ONE_OF_THREE_CODE_BLOCK}}
+### Static Graph
 
-{{BRANCH_ONE_OF_THREE_DEMO_FULL_TABLE}}
+{{CONTEXT_FLOW_STATIC_GRAPH}}
 
-### Two Of Three Branches
+### Example Run
 
-Selector returns multiple branch keys.
+{{CONTEXT_FLOW_reviewer_FULL_TABLE}}
 
-{{BRANCH_TWO_OF_THREE_CODE_BLOCK}}
+## Map Example
 
-{{BRANCH_TWO_OF_THREE_DEMO_FULL_TABLE}}
+This flow demonstrates runtime payload remapping. The flow-level `map` shapes the callback payload for every step while
+the underlying flow data still accumulates normal step outputs.
 
-### Nested Branch
+{{MAP_FLOW_CODE_BLOCK}}
 
-A branch can route into another branch flow.
+### Flow Layout
 
-{{NESTED_BRANCH_CODE_BLOCK}}
+{{MAP_FLOW_FLOW_HTML}}
 
-{{NESTED_BRANCH_DEMO_FULL_TABLE}}
+### Static Graph
 
-### Skipped Branch
+{{MAP_FLOW_STATIC_GRAPH}}
 
-Selector returns 'skip' status instead of branch keys.
+### Example Run
 
-{{BRANCH_SKIP_CODE_BLOCK}}
+{{MAP_FLOW_manual_FULL_TABLE}}
 
-{{BRANCH_SKIP_DEMO_FULL_TABLE}}
+## Resolver And Branch Example
+
+This example uses object-valued step ids with a flow-level resolver. Each object provides the source metadata and can
+also provide a default `fn`. The resolver turns that object into the stored `{ id, description }` metadata. A
+step-level resolver can override the flow-level resolver for one node when needed.
+
+{{RESOLVER_FLOW_CODE_BLOCK}}
+
+### Flow Layout
+
+{{RESOLVER_FLOW_FLOW_HTML}}
+
+### Static Graph
+
+{{RESOLVER_FLOW_STATIC_GRAPH}}
+
+### Example Run
+
+{{RESOLVER_FLOW_manual_FULL_TABLE}}
+
+{{LEAF_FLOWS_HTML}}
