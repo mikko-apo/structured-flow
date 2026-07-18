@@ -10,8 +10,8 @@ describe('renderProcessAsMermaidGraph', () => {
         'ROUTE-1',
         ({ route }) => route,
         {
-          approve: createSyncFlow('APP-1', () => ({ approved: true }), { description: 'Approve request' }),
-          reject: createSyncFlow('REJ-1', () => ({ rejected: true }), { description: 'Reject request' }),
+          approve: createSyncFlow('APP-1', (_data, _params) => ({ approved: true }), { description: 'Approve request' }),
+          reject: createSyncFlow('REJ-1', (_data, _params) => ({ rejected: true }), { description: 'Reject request' }),
         },
         { description: 'Route request' }
       )
@@ -33,10 +33,10 @@ describe('renderProcessAsMermaidGraph', () => {
         'ROUTE-SYMBOL',
         ({ route }) => (route === 'approve' ? approveKey : rejectKey),
         {
-          [approveKey]: createSyncFlow('APP-SYMBOL', () => ({ approved: true }), {
+          [approveKey]: createSyncFlow('APP-SYMBOL', (_data, _params) => ({ approved: true }), {
             description: 'Approve symbol request',
           }),
-          [rejectKey]: createSyncFlow('REJ-SYMBOL', () => ({ rejected: true }), {
+          [rejectKey]: createSyncFlow('REJ-SYMBOL', (_data, _params) => ({ rejected: true }), {
             description: 'Reject symbol request',
           }),
         },
@@ -60,10 +60,10 @@ describe('renderProcessAsMermaidGraph', () => {
         'ROUTE-SYMBOL-RUN',
         ({ route }) => (route === 'approve' ? approveKey : rejectKey),
         {
-          [approveKey]: createSyncFlow('APP-SYMBOL-RUN', () => ({ approved: true }), {
+          [approveKey]: createSyncFlow('APP-SYMBOL-RUN', (_data, _params) => ({ approved: true }), {
             description: 'Approve symbol request',
           }),
-          [rejectKey]: createSyncFlow('REJ-SYMBOL-RUN', () => ({ rejected: true }), {
+          [rejectKey]: createSyncFlow('REJ-SYMBOL-RUN', (_data, _params) => ({ rejected: true }), {
             description: 'Reject symbol request',
           }),
         },
@@ -89,13 +89,13 @@ describe('renderProcessAsMermaidGraph', () => {
         {
           approve: createSyncFlow(
             'APP-SKIP',
-            () =>
+            (_data, _params) =>
               stepResult({
                 status: 'skip',
               }),
             { description: 'Approve but skip' }
           ),
-          reject: createSyncFlow('REJ-SKIP', () => ({ rejected: true }), { description: 'Reject request' }),
+          reject: createSyncFlow('REJ-SKIP', (_data, _params) => ({ rejected: true }), { description: 'Reject request' }),
         },
         { description: 'Route request' }
       )
@@ -113,7 +113,7 @@ describe('renderProcessAsMermaidGraph', () => {
   it('renders statuses and payload text from an executed result', async () => {
     const rulesFlow = createAsyncFlow(
       'RULES-1',
-      async ({ checks }: { checks: Array<'audit' | 'rules'> }) =>
+      async ({ checks }: { checks: Array<'audit' | 'rules'> }, _params) =>
         stepResult({
           status: checks.includes('rules') ? 'error' : 'ok',
           info: 'Rules failed.',
@@ -126,7 +126,7 @@ describe('renderProcessAsMermaidGraph', () => {
         'BR-1',
         ({ checks }) => checks,
         {
-          audit: createAsyncFlow('AUDIT-1', async () => ({ audited: true }), { description: 'Audit' }),
+          audit: createAsyncFlow('AUDIT-1', async (_data, _params) => ({ audited: true }), { description: 'Audit' }),
           rules: rulesFlow,
         },
         { description: 'Run selected checks' }

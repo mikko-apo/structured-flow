@@ -58,10 +58,11 @@ Flow config currently supports:
 - `name?: string`: stored on the built flow as metadata
 - `description?: string`: stored on the built flow as metadata
 - `resolver?: ({ id, description }) => ({ id, description? })`: resolves metadata for object-valued step ids
-- `map?: ({ id, data, ctx, stepOptions }) => object`: remaps the payload passed to step and branch callbacks
+- `map?: ({ id, data, ctx, stepOptions, params }) => object`: augments callback params, and can optionally return `fnInput: [data, params]` to override the callback signature
 
-`resolver` is metadata-only. It does not change runtime payloads. `map` is runtime-only. It changes what the step
-function or branch selector receives.
+`resolver` is metadata-only. It does not change runtime payloads. `map` is runtime-only. By default it augments the
+second callback parameter while `data` remains the flow's accumulated data object. When a map returns
+`fnInput: [data, params]`, that tuple becomes the callback signature for that node.
 
 ## Step and branch options
 
@@ -75,7 +76,9 @@ function or branch selector receives.
     exception?: 'error'
   }
   resolver?: ({ id, description }) => ({ id, description? })
-  map?: ({ id, data, ctx, stepOptions }) => object
+  map?: ({ id, data, ctx, stepOptions, params }) => object & {
+    fnInput?: [data: object, params: object]
+  }
 }
 ```
 
@@ -84,8 +87,11 @@ The flow-level `map` runs before a step-level or branch-level `map`.
 
 ## Runtime behavior
 
-- Without `map`, a callback is invoked as `fn(data)` or `fn(data, ctx)`
-- With `map`, a callback is invoked as `fn(mappedPayload)`
+- Step callbacks are invoked as `fn(data, params)`
+- Branch selectors are invoked as `select(data, params)`
+- Without `map`, `params` is `{ ctx }`
+- With `map`, its returned fields are merged into `params` and `params.ctx` stays available
+- With `map().fnInput`, the callback is invoked with that explicit `[data, params]` tuple instead
 - `withContext<Ctx>()` enables `flow.run(data, ctx)` and types downstream callbacks accordingly
 - `stepResult({ status, ...payload })` records status and keeps non-status fields as result payload
 
@@ -117,14 +123,14 @@ returned data.
 ```ts
 const loadOccupancies = createAsyncFlow(
   'IC10',
-  async ({ form }: { form: SubmittedForm }) => ({
+  async ({ form }: { form: SubmittedForm }, _params) => ({
     occupancyCount: form.occupantCount,
   }),
   { description: 'Get linked occupancy records' }
 )
   .step(
     'IC20',
-    ({ form }) =>
+    ({ form }, _params) =>
       stepResult({
         status: form.occupantCount >= 2 ? 'ok' : 'error',
         info: form.occupantCount >= 2 ? 'Occupancy count looks good.' : 'Expected at least two occupancies.',
@@ -287,7 +293,7 @@ const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
 })
   .step(
     'META-10',
-    ({ form }) => ({
+    ({ form }, _params) => ({
       reviewTarget: form.id,
     }),
     { description: 'Record the form id as the review target' }
@@ -410,7 +416,8 @@ reviewTarget=meta-200"]
 
 ## Context Example
 
-This flow uses `withContext()` so `flow.run(data, ctx)` passes a separate context object to each step callback.
+This flow uses `withContext()` so `flow.run(data, ctx)` passes a separate context object to each callback through the
+`params.ctx` field.
 
 <a id="context-flow-code-block"></a>
 ```ts
@@ -421,8 +428,8 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
   .withContext<ContextFlowCtx>()
   .step(
     'CTX-10',
-    ({ form }, ctx) => ({
-      actorLabel: `${ctx.role}:${ctx.actorId}`,
+    ({ form }, params) => ({
+      actorLabel: `${params.ctx.role}:${params.ctx.actorId}`,
       reviewTarget: form.id,
     }),
     { description: 'Attach actor context to the review' }
@@ -552,37 +559,54 @@ actorLabel=reviewer:user-7, reviewTarget=ctx-200"]
 
 ## Map Example
 
-This flow demonstrates runtime payload remapping. The flow-level `map` shapes the callback payload for every step while
-the underlying flow data still accumulates normal step outputs.
+This flow demonstrates runtime params augmentation and `fnInput`. The flow-level `map` adds derived fields to the
+`params` argument and then overrides the callback signature with `fnInput`.
 
 <a id="map-flow-code-block"></a>
 ```ts
 const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
   name: 'Mapped Review Flow',
-  description: 'Demonstrates flow-level map() payload remapping.',
+  description: 'Demonstrates flow-level map() params augmentation and fnInput overrides.',
   map: ({ data }) => ({
     submissionId: data.form.id,
     occupancyCount: data.form.occupantCount,
     requiresManualReview: data.form.requiresManualReview,
     summary: data.summary,
+    fnInput: [
+      {
+        submissionId: data.form.id,
+        occupancyCount: data.form.occupantCount,
+        summary: data.summary,
+      },
+      {
+        ctx: undefined,
+        submissionId: data.form.id,
+        occupancyCount: data.form.occupantCount,
+        requiresManualReview: data.form.requiresManualReview,
+        summary: data.summary,
+      },
+    ],
   }),
 })
   .step(
     'MAP-10',
-    ({ submissionId, occupancyCount }) => ({
-      summary: `${submissionId}:${occupancyCount}`,
+    (data, params) => ({
+      summary: `${data.submissionId}:${data.occupancyCount}`,
+      reviewTarget: params.submissionId,
     }),
-    { description: 'Use the flow-level mapped payload' }
+    { description: 'Use fnInput to override the callback signature' }
   )
   .step(
     'MAP-20',
-    ({ summary, requiresManualReview }) =>
+    (data, params) =>
       stepResult({
-        status: requiresManualReview ? 'error' : 'ok',
-        info: requiresManualReview ? `Escalate ${summary ?? 'missing-summary'}` : `Auto-approve ${summary ?? 'missing-summary'}`,
+        status: params.requiresManualReview ? 'error' : 'ok',
+        info: params.requiresManualReview
+          ? `Escalate ${data.summary ?? 'missing-summary'}`
+          : `Auto-approve ${data.summary ?? 'missing-summary'}`,
       }),
     {
-      description: 'Use the same mapped payload after step output has updated the flow data',
+      description: 'Use the same fnInput override after step output has updated the flow data',
     }
   )
   .build()
@@ -593,10 +617,10 @@ const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
 <a id="map-flow-flow-html"></a>
 <!-- structured-process-demo:map-flow-flow-html:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>MAP-10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">MAP-10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Use the flow-level mapped payload</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>MAP-10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">MAP-10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Use fnInput to override the callback signature</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
 </tr><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>MAP-20</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">MAP-20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Use the same mapped payload after step output has updated the flow data</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>MAP-20</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">MAP-20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Use the same fnInput override after step output has updated the flow data</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
 </tr></tbody></table>
 <!-- structured-process-demo:map-flow-flow-html:html-table:end -->
@@ -610,9 +634,9 @@ const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
 ```mermaid
 flowchart TD
   start([Start])
-  step_0["MAP-10: Use the flow-level mapped payload"]
+  step_0["MAP-10: Use fnInput to override the callback signature"]
   step_0 --> step_1
-  step_1["MAP-20: Use the same mapped payload after step output has updated the flow data"]
+  step_1["MAP-20: Use the same fnInput override after step output has updated the flow data"]
   step_1 --> done
   done([Done])
   start --> step_0
@@ -626,10 +650,10 @@ flowchart TD
 <!-- structured-process-demo:map-flow-static-graph:mermaid:end -->
 
 </div></div><div><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>MAP-10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">MAP-10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Use the flow-level mapped payload</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>MAP-10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">MAP-10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Use fnInput to override the callback signature</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
 </tr><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>MAP-20</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">MAP-20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Use the same mapped payload after step output has updated the flow data</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>MAP-20</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">MAP-20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Use the same fnInput override after step output has updated the flow data</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
 </tr></tbody></table></div></div>
 
@@ -662,15 +686,16 @@ flowchart TD
   &quot;stepResults&quot;: [
     {
       &quot;id&quot;: &quot;MAP-10&quot;,
-      &quot;description&quot;: &quot;Use the flow-level mapped payload&quot;,
+      &quot;description&quot;: &quot;Use fnInput to override the callback signature&quot;,
       &quot;status&quot;: &quot;ok&quot;,
       &quot;result&quot;: {
-        &quot;summary&quot;: &quot;map-400:1&quot;
+        &quot;summary&quot;: &quot;map-400:1&quot;,
+        &quot;reviewTarget&quot;: &quot;map-400&quot;
       }
     },
     {
       &quot;id&quot;: &quot;MAP-20&quot;,
-      &quot;description&quot;: &quot;Use the same mapped payload after step output has updated the flow data&quot;,
+      &quot;description&quot;: &quot;Use the same fnInput override after step output has updated the flow data&quot;,
       &quot;status&quot;: &quot;error&quot;,
       &quot;result&quot;: {
         &quot;info&quot;: &quot;Escalate missing-summary&quot;
@@ -690,11 +715,11 @@ flowchart TD
 ```mermaid
 flowchart TD
   start([Start])
-  step_0["MAP-10: Use the flow-level mapped payload
+  step_0["MAP-10: Use fnInput to override the callback signature
 [ok]
-summary=map-400:1"]
+summary=map-400:1, reviewTarget=map-400"]
   step_0 --> step_1
-  step_1["MAP-20: Use the same mapped payload after step output has updated the flow data
+  step_1["MAP-20: Use the same fnInput override after step output has updated the flow data
 [error]
 Escalate missing-summary"]
   step_1 --> done
@@ -719,13 +744,13 @@ Escalate missing-summary"]
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">MAP-10</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Use the flow-level mapped payload</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Use fnInput to override the callback signature</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;summary&quot;:&quot;map-400:1&quot;}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;summary&quot;:&quot;map-400:1&quot;,&quot;reviewTarget&quot;:&quot;map-400&quot;}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">MAP-20</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Use the same mapped payload after step output has updated the flow data</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Use the same fnInput override after step output has updated the flow data</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Escalate missing-summary&quot;}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
@@ -747,7 +772,7 @@ const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
   .step({
     id: 'VALIDATE-1',
     description: 'Validate request',
-    fn: ({ form }) => ({
+    fn: ({ form }, _params) => ({
       valid: form.id.length > 0,
     }),
   })
@@ -756,14 +781,14 @@ const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
       id: 'REVIEW-1',
       description: 'Route review',
     },
-    ({ form }) => (form.requiresManualReview ? 'manual' : 'auto'),
+    ({ form }, _params) => (form.requiresManualReview ? 'manual' : 'auto'),
     {
       auto: createSyncFlow<StepInfo, ReviewData>({
         resolver: resolveStepMeta,
       }).step({
         id: 'AUTO-1',
         description: 'Auto approve',
-        fn: ({ checks }) => ({
+        fn: ({ checks }, _params) => ({
           checksSeen: checks.length,
         }),
       }),
@@ -772,7 +797,7 @@ const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
       }).step({
         id: 'MANUAL-1',
         description: 'Send to manual review',
-        fn: ({ form }) =>
+        fn: ({ form }, _params) =>
           stepResult({
             status: 'error',
             info: `Manual review required for ${form.id}.`,

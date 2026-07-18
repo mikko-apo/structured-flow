@@ -47,10 +47,11 @@ Flow config currently supports:
 - `name?: string`: stored on the built flow as metadata
 - `description?: string`: stored on the built flow as metadata
 - `resolver?: ({ id, description }) => ({ id, description? })`: resolves metadata for object-valued step ids
-- `map?: ({ id, data, ctx, stepOptions }) => object`: remaps the payload passed to step and branch callbacks
+- `map?: ({ id, data, ctx, stepOptions, params }) => object`: augments callback params, and can optionally return `fnInput: [data, params]` to override the callback signature
 
-`resolver` is metadata-only. It does not change runtime payloads. `map` is runtime-only. It changes what the step
-function or branch selector receives.
+`resolver` is metadata-only. It does not change runtime payloads. `map` is runtime-only. By default it augments the
+second callback parameter while `data` remains the flow's accumulated data object. When a map returns
+`fnInput: [data, params]`, that tuple becomes the callback signature for that node.
 
 ## Step and branch options
 
@@ -64,7 +65,9 @@ function or branch selector receives.
     exception?: 'error'
   }
   resolver?: ({ id, description }) => ({ id, description? })
-  map?: ({ id, data, ctx, stepOptions }) => object
+  map?: ({ id, data, ctx, stepOptions, params }) => object & {
+    fnInput?: [data: object, params: object]
+  }
 }
 ```
 
@@ -73,8 +76,11 @@ The flow-level `map` runs before a step-level or branch-level `map`.
 
 ## Runtime behavior
 
-- Without `map`, a callback is invoked as `fn(data)` or `fn(data, ctx)`
-- With `map`, a callback is invoked as `fn(mappedPayload)`
+- Step callbacks are invoked as `fn(data, params)`
+- Branch selectors are invoked as `select(data, params)`
+- Without `map`, `params` is `{ ctx }`
+- With `map`, its returned fields are merged into `params` and `params.ctx` stays available
+- With `map().fnInput`, the callback is invoked with that explicit `[data, params]` tuple instead
 - `withContext<Ctx>()` enables `flow.run(data, ctx)` and types downstream callbacks accordingly
 - `stepResult({ status, ...payload })` records status and keeps non-status fields as result payload
 
@@ -137,7 +143,8 @@ by surrounding tooling or documentation.
 
 ## Context Example
 
-This flow uses `withContext()` so `flow.run(data, ctx)` passes a separate context object to each step callback.
+This flow uses `withContext()` so `flow.run(data, ctx)` passes a separate context object to each callback through the
+`params.ctx` field.
 
 {{CONTEXT_FLOW_CODE_BLOCK}}
 
@@ -155,8 +162,8 @@ This flow uses `withContext()` so `flow.run(data, ctx)` passes a separate contex
 
 ## Map Example
 
-This flow demonstrates runtime payload remapping. The flow-level `map` shapes the callback payload for every step while
-the underlying flow data still accumulates normal step outputs.
+This flow demonstrates runtime params augmentation and `fnInput`. The flow-level `map` adds derived fields to the
+`params` argument and then overrides the callback signature with `fnInput`.
 
 {{MAP_FLOW_CODE_BLOCK}}
 

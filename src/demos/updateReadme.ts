@@ -45,12 +45,16 @@ type MapFlowMapper = (params: {
   occupancyCount: number
   requiresManualReview: boolean
   summary?: string
+  fnInput: [
+    { submissionId: string; occupancyCount: number; summary?: string },
+    { ctx: undefined; submissionId: string; occupancyCount: number; requiresManualReview: boolean; summary?: string }
+  ]
 }
 
 type StepInfo = {
   id: string
   description: string
-  fn?: (data: ReviewData) => Record<string, unknown> | Promise<Record<string, unknown>>
+  fn?: (data: ReviewData, params: { ctx: unknown }) => Record<string, unknown> | Promise<Record<string, unknown>>
 }
 
 function resolveStepMeta({
@@ -69,14 +73,14 @@ function resolveStepMeta({
 /* CORE_API:START */
 const loadOccupancies = createAsyncFlow(
   'IC10',
-  async ({ form }: { form: SubmittedForm }) => ({
+  async ({ form }: { form: SubmittedForm }, _params) => ({
     occupancyCount: form.occupantCount,
   }),
   { description: 'Get linked occupancy records' }
 )
   .step(
     'IC20',
-    ({ form }) =>
+    ({ form }, _params) =>
       stepResult({
         status: form.occupantCount >= 2 ? 'ok' : 'error',
         info: form.occupantCount >= 2 ? 'Occupancy count looks good.' : 'Expected at least two occupancies.',
@@ -93,7 +97,7 @@ const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
 })
   .step(
     'META-10',
-    ({ form }) => ({
+    ({ form }, _params) => ({
       reviewTarget: form.id,
     }),
     { description: 'Record the form id as the review target' }
@@ -109,8 +113,8 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
   .withContext<ContextFlowCtx>()
   .step(
     'CTX-10',
-    ({ form }, ctx) => ({
-      actorLabel: `${ctx.role}:${ctx.actorId}`,
+    ({ form }, params) => ({
+      actorLabel: `${params.ctx.role}:${params.ctx.actorId}`,
       reviewTarget: form.id,
     }),
     { description: 'Attach actor context to the review' }
@@ -121,30 +125,47 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
 /* MAP_FLOW:START */
 const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
   name: 'Mapped Review Flow',
-  description: 'Demonstrates flow-level map() payload remapping.',
+  description: 'Demonstrates flow-level map() params augmentation and fnInput overrides.',
   map: ({ data }) => ({
     submissionId: data.form.id,
     occupancyCount: data.form.occupantCount,
     requiresManualReview: data.form.requiresManualReview,
     summary: data.summary,
+    fnInput: [
+      {
+        submissionId: data.form.id,
+        occupancyCount: data.form.occupantCount,
+        summary: data.summary,
+      },
+      {
+        ctx: undefined,
+        submissionId: data.form.id,
+        occupancyCount: data.form.occupantCount,
+        requiresManualReview: data.form.requiresManualReview,
+        summary: data.summary,
+      },
+    ],
   }),
 })
   .step(
     'MAP-10',
-    ({ submissionId, occupancyCount }) => ({
-      summary: `${submissionId}:${occupancyCount}`,
+    (data, params) => ({
+      summary: `${data.submissionId}:${data.occupancyCount}`,
+      reviewTarget: params.submissionId,
     }),
-    { description: 'Use the flow-level mapped payload' }
+    { description: 'Use fnInput to override the callback signature' }
   )
   .step(
     'MAP-20',
-    ({ summary, requiresManualReview }) =>
+    (data, params) =>
       stepResult({
-        status: requiresManualReview ? 'error' : 'ok',
-        info: requiresManualReview ? `Escalate ${summary ?? 'missing-summary'}` : `Auto-approve ${summary ?? 'missing-summary'}`,
+        status: params.requiresManualReview ? 'error' : 'ok',
+        info: params.requiresManualReview
+          ? `Escalate ${data.summary ?? 'missing-summary'}`
+          : `Auto-approve ${data.summary ?? 'missing-summary'}`,
       }),
     {
-      description: 'Use the same mapped payload after step output has updated the flow data',
+      description: 'Use the same fnInput override after step output has updated the flow data',
     }
   )
   .build()
@@ -157,7 +178,7 @@ const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
   .step({
     id: 'VALIDATE-1',
     description: 'Validate request',
-    fn: ({ form }) => ({
+    fn: ({ form }, _params) => ({
       valid: form.id.length > 0,
     }),
   })
@@ -166,14 +187,14 @@ const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
       id: 'REVIEW-1',
       description: 'Route review',
     },
-    ({ form }) => (form.requiresManualReview ? 'manual' : 'auto'),
+    ({ form }, _params) => (form.requiresManualReview ? 'manual' : 'auto'),
     {
       auto: createSyncFlow<StepInfo, ReviewData>({
         resolver: resolveStepMeta,
       }).step({
         id: 'AUTO-1',
         description: 'Auto approve',
-        fn: ({ checks }) => ({
+        fn: ({ checks }, _params) => ({
           checksSeen: checks.length,
         }),
       }),
@@ -182,7 +203,7 @@ const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
       }).step({
         id: 'MANUAL-1',
         description: 'Send to manual review',
-        fn: ({ form }) =>
+        fn: ({ form }, _params) =>
           stepResult({
             status: 'error',
             info: `Manual review required for ${form.id}.`,
@@ -246,7 +267,7 @@ export async function writeStructuredProcessExampleMarkdown(
       {
         id: 'MAP_FLOW',
         title: 'Mapped payload flow',
-        description: 'Flow using flow-level and step-level map() to reshape callback payloads.',
+        description: 'Flow using flow-level map() to augment params and override callback inputs with fnInput.',
         flow: mappedReviewFlow,
         demos: [
           {

@@ -22,7 +22,8 @@ export type AnyStepMap = (params: {
   data: object
   ctx: unknown
   stepOptions?: StepOptions
-}) => object
+  params?: object
+}) => object & { fnInput?: readonly [object, object] }
 
 export type StepOptions = {
   description?: string
@@ -37,12 +38,12 @@ export class StepInfo<
   Id = string,
   Data extends object = object,
   Result extends object = object,
-  Ctx = undefined,
+  Params extends object = { ctx: undefined },
 > {
   constructor(
     readonly id: string,
     readonly rawId: Id,
-    readonly fn: (data: Expand<Data>, ctx: Ctx) => MaybePromise<Result>,
+    readonly fn: (data: Expand<Data>, params: Expand<Params>) => MaybePromise<Result>,
     readonly options?: StepOptions
   ) {}
 }
@@ -60,13 +61,13 @@ export class StepBranchInfo<
   Id = string,
   Data extends object = object,
   SelectedKey extends PropertyKey = PropertyKey,
-  Ctx = undefined,
+  Params extends object = { ctx: undefined },
   TBranches extends Record<PropertyKey, FlowLike> = Record<PropertyKey, FlowLike>,
 > {
   constructor(
     readonly id: string,
     readonly rawId: Id,
-    readonly select: (data: Expand<Data>, ctx: Ctx) => BranchSelectFnReturnValue<SelectedKey>,
+    readonly select: (data: Expand<Data>, params: Expand<Params>) => BranchSelectFnReturnValue<SelectedKey>,
     readonly branches: TBranches,
     readonly options?: StepOptions
   ) {}

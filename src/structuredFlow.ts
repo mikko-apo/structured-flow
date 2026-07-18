@@ -19,8 +19,8 @@ type BranchSelectFnReturnValue<Key extends PropertyKey> = Key | readonly Key[] |
 
 type CompatibleBranchFlow<Data extends object, Ctx> =
   | Flow<Data, any, any, undefined>
-  | FlowBuilder<Data, any, any, any, undefined, any, any, any>
-  | ([Ctx] extends [undefined] ? never : Flow<Data, any, any, Ctx> | FlowBuilder<Data, any, any, any, Ctx, any, any, any>)
+  | FlowBuilder<Data, any, any, any, undefined, any, any>
+  | ([Ctx] extends [undefined] ? never : Flow<Data, any, any, Ctx> | FlowBuilder<Data, any, any, any, Ctx, any, any>)
 
 type BranchFlowMap<Data extends object, Ctx, SelectedKey extends PropertyKey = PropertyKey> = Record<
   SelectedKey,
@@ -48,37 +48,7 @@ type ResolvedStepReturn<Mode extends AsyncMode, Result> = Mode extends 'sync'
   ? ValidStepReturn<'sync', Result>
   : Awaited<ValidStepReturn<'async', Result>>
 
-type ValidateFnContext<Fn, ExpectedCtx> = [ExpectedCtx] extends [undefined]
-  ? Fn
-  : Fn extends (...args: infer Args) => any
-    ? Args extends [] | [any]
-      ? Fn
-      : Expand<ExpectedCtx> extends Args[1]
-        ? Fn
-        : never
-    : never
-
-type ValidateFnShape<Fn, ExpectedData extends object, ExpectedCtx> = Fn extends (...args: any[]) => any
-  ? Expand<ExpectedData> extends StepInputData<Fn>
-    ? ValidateFnContext<Fn, ExpectedCtx> extends never
-      ? never
-      : Fn
-    : never
-  : never
-
-type ValidateStepFn<Fn, ExpectedData extends object, ExpectedCtx, Mode extends AsyncMode> =
-  ValidateFnShape<Fn, ExpectedData, ExpectedCtx> extends never
-    ? never
-    : ValidStepReturn<Mode, StepOutput<Fn>> extends never
-      ? never
-      : Fn
-
-type ValidateBranchSelect<Fn, ExpectedData extends object, ExpectedCtx, Key extends PropertyKey> =
-  ValidateFnShape<Fn, ExpectedData, ExpectedCtx> extends never
-    ? never
-    : StepOutput<Fn> extends BranchSelectFnReturnValue<Key>
-      ? Fn
-      : never
+type ValidateStepFn<Fn, Mode extends AsyncMode> = ValidStepReturn<Mode, StepOutput<Fn>> extends never ? never : Fn
 
 type MapOutput<Map, Fallback extends object> = [Map] extends [undefined]
   ? Fallback
@@ -89,11 +59,30 @@ type MapOutput<Map, Fallback extends object> = [Map] extends [undefined]
     : Fallback
 
 type MapFromOptions<Options> = Options extends { map?: infer Map } ? Exclude<Map, undefined> : never
-type MappedStepData<Options, Fallback extends object> = [MapFromOptions<Options>] extends [never]
-  ? Fallback
-  : MapOutput<MapFromOptions<Options>, Fallback>
-type MappedStepCtx<Options, Fallback> = [MapFromOptions<Options>] extends [never] ? Fallback : undefined
-type HasMap<Map> = [Map] extends [undefined] ? false : true
+type FnInputTuple = readonly [data: object, params: object]
+type MapParamsOutput<Map> = Omit<MapOutput<Map, object>, 'fnInput'>
+type MapFnInput<Map> = MapOutput<Map, object> extends { fnInput: infer Input }
+  ? Input extends readonly [infer Data extends object, infer Params extends object]
+    ? [Expand<Data>, Expand<Params>]
+    : never
+  : never
+type MergeStepParams<Params extends object, Map> = Expand<Params & MapParamsOutput<Map>>
+type ApplyMapInput<Map, Data extends object, Params extends object> = [Map] extends [undefined]
+  ? [Data, Params]
+  : [MapFnInput<Map>] extends [never]
+    ? [Data, MergeStepParams<Params, Map>]
+    : MapFnInput<Map>
+type StepInputDataWithMap<Options, Data extends object, Params extends object> = ApplyMapInput<
+  MapFromOptions<Options>,
+  Data,
+  Params
+>[0]
+type StepInputParamsWithMap<Options, Data extends object, Params extends object> = ApplyMapInput<
+  MapFromOptions<Options>,
+  Data,
+  Params
+>[1]
+type ReplaceStepCtx<Params extends object, Ctx> = Expand<Omit<Params, 'ctx'> & { ctx: Ctx }>
 type InferResolverStepId<Resolver> = Resolver extends (params: { id: infer StepId; description?: string }) => any
   ? StepId
   : string
@@ -110,7 +99,8 @@ type StepMapFn<StepId, Data extends object, Ctx, Output extends object> = (param
   data: Expand<Data>
   ctx: Ctx
   stepOptions?: StepOptions
-}) => Output
+  params?: object
+}) => Output & { fnInput?: FnInputTuple }
 
 type ValidateResolverInput<Resolver, StepId> = Resolver extends (params: infer Params) => any
   ? Params extends { id: infer ResolverStepId; description?: string }
@@ -224,8 +214,7 @@ class FlowBuilder<
   Mode extends AsyncMode = AsyncMode,
   RunCtx = undefined,
   StepData extends object = RunData,
-  StepCtx = RunCtx,
-  FlowHasMap extends boolean = false,
+  StepParams extends object = { ctx: RunCtx },
 > {
   declare readonly __flowRunDataType__: (data: RunData) => RunData
   declare readonly __flowRunCtxType__: (ctx: RunCtx) => RunCtx
@@ -237,22 +226,20 @@ class FlowBuilder<
     private readonly map?: AnyStepMap,
     readonly name?: string,
     readonly description?: string,
-    private readonly allowsContext = false,
-    private readonly stepAllowsContext = false
+    private readonly allowsContext = false
   ) {}
 
   private appendStep<NewStep extends FlowStepInfo>(
     newStep: NewStep
-  ): FlowBuilder<RunData, StepId, [...Steps, NewStep], Mode, RunCtx, StepData, StepCtx, FlowHasMap> {
-    return new FlowBuilder<RunData, StepId, [...Steps, NewStep], Mode, RunCtx, StepData, StepCtx, FlowHasMap>(
+  ): FlowBuilder<RunData, StepId, [...Steps, NewStep], Mode, RunCtx, StepData, StepParams> {
+    return new FlowBuilder<RunData, StepId, [...Steps, NewStep], Mode, RunCtx, StepData, StepParams>(
       [...this.steps, newStep] as [...Steps, NewStep],
       this.asyncMode,
       this.resolver,
       this.map,
       this.name,
       this.description,
-      this.allowsContext,
-      this.stepAllowsContext
+      this.allowsContext
     )
   }
 
@@ -264,8 +251,7 @@ class FlowBuilder<
       Mode,
       NewCtx,
       StepData,
-      FlowHasMap extends true ? StepCtx : NewCtx,
-      FlowHasMap
+      ReplaceStepCtx<StepParams, NewCtx>
     >(
       this.steps,
       this.asyncMode,
@@ -273,8 +259,7 @@ class FlowBuilder<
       this.map,
       this.name,
       this.description,
-      true,
-      this.map == null
+      true
     )
   }
 
@@ -288,29 +273,46 @@ class FlowBuilder<
   ): FlowBuilder<
     RunData,
     StepId,
-    [...Steps, StepInfo<StepId, MappedStepData<TOptions, StepData>, object, MappedStepCtx<TOptions, StepCtx>>],
+    [...Steps, StepInfo<StepId, StepInputDataWithMap<TOptions, StepData, StepParams>, object, StepInputParamsWithMap<TOptions, StepData, StepParams>>],
     Mode,
     RunCtx,
     StepData,
-    StepCtx,
-    FlowHasMap
+    StepParams
   >
-  step<Fn extends (...args: any[]) => any, TOptions extends StepOptions | undefined = undefined>(
+  step<
+    TOptions extends StepOptions | undefined = undefined,
+    Fn extends (
+      data: StepInputDataWithMap<TOptions, StepData, StepParams>,
+      params: StepInputParamsWithMap<TOptions, StepData, StepParams>
+    ) => any = Mode extends 'sync'
+      ? (
+          data: StepInputDataWithMap<TOptions, StepData, StepParams>,
+          params: StepInputParamsWithMap<TOptions, StepData, StepParams>
+        ) => object
+      : (
+          data: StepInputDataWithMap<TOptions, StepData, StepParams>,
+          params: StepInputParamsWithMap<TOptions, StepData, StepParams>
+        ) => MaybePromise<object>,
+  >(
     stepId: StepId,
-    fn: ValidateStepFn<Fn, MappedStepData<TOptions, StepData>, MappedStepCtx<TOptions, StepCtx>, Mode>,
+    fn: ValidateStepFn<Fn, Mode>,
     options?: TOptions
   ): FlowBuilder<
     RunData,
     StepId,
     [
       ...Steps,
-      StepInfo<StepId, MappedStepData<TOptions, StepData>, ResolvedStepReturn<Mode, ReturnType<Fn>>, MappedStepCtx<TOptions, StepCtx>>,
+      StepInfo<
+        StepId,
+        StepInputDataWithMap<TOptions, StepData, StepParams>,
+        ResolvedStepReturn<Mode, ReturnType<Fn>>,
+        StepInputParamsWithMap<TOptions, StepData, StepParams>
+      >,
     ],
     Mode,
     RunCtx,
     StepData,
-    StepCtx,
-    FlowHasMap
+    StepParams
   >
   step(stepId: StepId, fnOrOptions?: unknown, maybeOptions?: StepOptions): any {
     const isFunction = typeof fnOrOptions === 'function'
@@ -328,25 +330,25 @@ class FlowBuilder<
     }
 
     return this.appendStep(
-      new StepInfo(preview.id, stepId, defaultFn as StepInfo<StepId, object, object, StepCtx>['fn'], preview.options)
+      new StepInfo(preview.id, stepId, defaultFn as StepInfo<StepId, object, object, StepParams>['fn'], preview.options)
     )
   }
 
   branch<
     TOptions extends StepOptions | undefined = undefined,
     SelectedKey extends PropertyKey = PropertyKey,
-    TBranches extends BranchFlowMap<MappedStepData<TOptions, StepData>, MappedStepCtx<TOptions, StepCtx>, SelectedKey> = BranchFlowMap<
-      MappedStepData<TOptions, StepData>,
-      MappedStepCtx<TOptions, StepCtx>,
+    TBranches extends BranchFlowMap<RunData, RunCtx, SelectedKey> = BranchFlowMap<
+      RunData,
+      RunCtx,
       SelectedKey
     >,
     Select extends (...args: any[]) => any = (
-      data: MappedStepData<TOptions, StepData>,
-      ctx: MappedStepCtx<TOptions, StepCtx>
+      data: StepInputDataWithMap<TOptions, StepData, StepParams>,
+      params: StepInputParamsWithMap<TOptions, StepData, StepParams>
     ) => BranchSelectFnReturnValue<SelectedKey>,
   >(
     stepId: StepId,
-    select: ValidateBranchSelect<Select, MappedStepData<TOptions, StepData>, MappedStepCtx<TOptions, StepCtx>, SelectedKey>,
+    select: Select,
     branches: TBranches,
     options?: TOptions
   ): FlowBuilder<
@@ -356,20 +358,18 @@ class FlowBuilder<
       ...Steps,
       StepBranchInfo<
         StepId,
-        StepData,
+        StepInputDataWithMap<TOptions, StepData, StepParams>,
         SelectedKey,
-        StepCtx,
+        StepInputParamsWithMap<TOptions, StepData, StepParams>,
         NormalizedBranchFlows<TBranches>
       >,
     ],
     Mode,
     RunCtx,
     StepData,
-    StepCtx,
-    FlowHasMap
+    StepParams
   > {
     const preview = this.previewStep(stepId, options)
-    const branchAllowsContext = options?.map == null && this.stepAllowsContext
     const normalizedBranches = Object.fromEntries(
       getOwnEntries(branches).map(([key, flow]) => {
         const normalizedFlow = flow instanceof Flow ? flow : flow.build()
@@ -378,7 +378,7 @@ class FlowBuilder<
           throw new Error(`Flow branch "${preview.id}" cannot include async flow "${String(key)}" in sync mode`)
         }
 
-        if (!branchAllowsContext && normalizedFlow.allowsContext) {
+        if (!this.allowsContext && normalizedFlow.allowsContext) {
           throw new Error(
             `Flow branch "${preview.id}" cannot include context flow "${String(key)}" without withContext()`
           )
@@ -394,9 +394,9 @@ class FlowBuilder<
         stepId,
         select as StepBranchInfo<
           StepId,
-          StepData,
+          StepInputDataWithMap<TOptions, StepData, StepParams>,
           SelectedKey,
-          StepCtx,
+          StepInputParamsWithMap<TOptions, StepData, StepParams>,
           NormalizedBranchFlows<TBranches>
         >['select'],
         normalizedBranches,
@@ -418,7 +418,7 @@ class FlowBuilder<
 }
 
 type CreateFlowFactory<Mode extends AsyncMode> = {
-  <Data extends object = object>(): FlowBuilder<Data, string, [], Mode, undefined, Data, undefined, false>
+  <Data extends object = object>(): FlowBuilder<Data, string, [], Mode, undefined, Data, { ctx: undefined }>
   <
     StepId,
     Data extends object,
@@ -431,44 +431,50 @@ type CreateFlowFactory<Mode extends AsyncMode> = {
     [],
     Mode,
     undefined,
-    MapOutput<Mapper, Data>,
-    MappedStepCtx<{ map?: Mapper }, undefined>,
-    HasMap<Mapper>
+    ApplyMapInput<Mapper, Data, { ctx: undefined }>[0],
+    ApplyMapInput<Mapper, Data, { ctx: undefined }>[1]
   >
   <Resolver extends StepInfoResolver<any>>(
     config: Omit<CreateFlowOptions<object, InferResolverStepId<Resolver>>, 'map'> & { resolver: Resolver }
-  ): FlowBuilder<object, InferResolverStepId<Resolver>, [], Mode, undefined, object, undefined, false>
+  ): FlowBuilder<object, InferResolverStepId<Resolver>, [], Mode, undefined, object, { ctx: undefined }>
   <
     StepId,
     Fn extends (...args: any[]) => any = Mode extends 'sync'
-      ? (data: any) => object
-      : (data: any) => MaybePromise<object>,
+      ? (data: any, params: { ctx: undefined }) => object
+      : (data: any, params: { ctx: undefined }) => MaybePromise<object>,
     Data extends object = Extract<StepInputData<Fn>, object>,
   >(
     id: StepId,
-    fn: ValidateStepFn<Fn, Data, undefined, Mode>,
+    fn: ValidateStepFn<Fn, Mode>,
     config?: Omit<CreateFlowOptions<Data, StepId>, 'resolver' | 'map'>
-  ): FlowBuilder<Data, StepId, [StepInfo<StepId, Data, ResolvedStepReturn<Mode, ReturnType<Fn>>, undefined>], Mode, undefined, Data, undefined, false>
+  ): FlowBuilder<
+    Data,
+    StepId,
+    [StepInfo<StepId, Data, ResolvedStepReturn<Mode, ReturnType<Fn>>, { ctx: undefined }>],
+    Mode,
+    undefined,
+    Data,
+    { ctx: undefined }
+  >
   <
     StepId,
     SelectedKey extends PropertyKey,
     TBranches extends BranchFlowMap<Data, undefined, SelectedKey>,
-    Select extends (...args: any[]) => any = (data: any) => BranchSelectFnReturnValue<SelectedKey>,
+    Select extends (...args: any[]) => any = (data: any, params: { ctx: undefined }) => BranchSelectFnReturnValue<SelectedKey>,
     Data extends object = Extract<StepInputData<Select>, object>,
   >(
     id: StepId,
-    select: ValidateBranchSelect<Select, Data, undefined, SelectedKey>,
+    select: Select,
     branches: TBranches,
     config?: StepOptions
   ): FlowBuilder<
     Data,
     StepId,
-    [StepBranchInfo<StepId, Data, SelectedKey, undefined, NormalizedBranchFlows<TBranches>>],
+    [StepBranchInfo<StepId, Data, SelectedKey, { ctx: undefined }, NormalizedBranchFlows<TBranches>>],
     Mode,
     undefined,
     Data,
-    undefined,
-    false
+    { ctx: undefined }
   >
 }
 
@@ -489,7 +495,6 @@ function createFlow<Mode extends AsyncMode>(asyncMode: Mode, ...args: unknown[])
       map,
       config.name,
       config.description,
-      false,
       false
     )
   }

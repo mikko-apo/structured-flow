@@ -17,7 +17,7 @@ type PersonData = {
 type StepId = {
   id: string
   description: string
-  fn?: (data: PersonData) => Record<string, unknown> | Promise<Record<string, unknown>>
+  fn?: (data: PersonData, params: { ctx: unknown }) => Record<string, unknown> | Promise<Record<string, unknown>>
 }
 
 function resolveStepMeta({
@@ -57,7 +57,7 @@ describe('structuredFlow core execution', () => {
           id: 'NAME-0',
           description: 'No-op',
         },
-        ({ person }) => ({
+        ({ person }, _params) => ({
           personId: person.id,
         })
       )
@@ -82,8 +82,8 @@ describe('structuredFlow core execution', () => {
           id: 'CTX-1',
           description: 'Uses request context',
         },
-        (data, ctx) => ({
-          actorId: ctx.actorId,
+        (data, params) => ({
+          actorId: params.ctx.actorId,
           personId: data.person.id,
         })
       )
@@ -107,8 +107,8 @@ describe('structuredFlow core execution', () => {
     expectTypeOf<Parameters<typeof flow.run>>().toEqualTypeOf<[data: PersonData, ctx: RequestCtx]>()
 
     // @ts-expect-error second parameter must match the configured ctx type
-    builder.step({ id: 'CTX-2', description: 'Invalid ctx' }, (data, ctx: { wrong: true }) => ({
-      actorId: String(ctx.wrong),
+    builder.step({ id: 'CTX-2', description: 'Invalid ctx' }, (data, params: { ctx: { wrong: true } }) => ({
+      actorId: String(params.ctx.wrong),
       personId: data.person.id,
     }))
   })
@@ -120,7 +120,7 @@ describe('structuredFlow core execution', () => {
           id: 'CTX-RUN-1',
           description: 'No ctx flow',
         },
-        ({ person }) => ({
+        ({ person }, _params) => ({
           personId: person.id,
         })
       )
@@ -150,8 +150,8 @@ describe('structuredFlow core execution', () => {
           id: 'CTX-RUN-2',
           description: 'Ctx flow',
         },
-        ({ person }, ctx) => ({
-          actorId: ctx.actorId,
+        ({ person }, params) => ({
+          actorId: params.ctx.actorId,
           personId: person.id,
         })
       )
@@ -170,7 +170,7 @@ describe('structuredFlow core execution', () => {
     const ageCheck: StepId = {
       id: 'AGE-1',
       description: 'Check age',
-      fn: ({ person }) => ({
+      fn: ({ person }, _params) => ({
         eligible: person.age >= 18,
       }),
     }
@@ -184,7 +184,7 @@ describe('structuredFlow core execution', () => {
       .step(ageCheck)
       .step(
         normalizeName,
-        ({ person }) =>
+        ({ person }, _params) =>
           stepResult({
             normalizedName: person.name.trim().toUpperCase(),
             info: 'Normalized with a custom fn override.',
@@ -239,7 +239,7 @@ describe('structuredFlow core execution', () => {
           id: 'OVERRIDE-1',
           description: 'Original description',
         },
-        ({ person }) => ({
+        ({ person }, _params) => ({
           seen: person.id,
         }),
         {
@@ -261,11 +261,58 @@ describe('structuredFlow core execution', () => {
     })
   })
 
+  it('lets map override the step callback signature with fnInput', () => {
+    type FlowMap = (params: { id: StepId; data: PersonData; ctx: undefined }) => {
+      submissionId: string
+      fnInput: [
+        { personId: string; route: PersonData['route'] },
+        { ctx: undefined; submissionId: string }
+      ]
+    }
+
+    const flow = createSyncFlow<StepId, PersonData, FlowMap>({
+      resolver: resolveStepMeta,
+      map: ({ data }) => ({
+        submissionId: data.person.id,
+        fnInput: [
+          { personId: data.person.id, route: data.route },
+          { ctx: undefined, submissionId: data.person.id },
+        ],
+      }),
+    })
+      .step(
+        {
+          id: 'FNINPUT-1',
+          description: 'Use fnInput override',
+        },
+        (data, params) => {
+          expectTypeOf(data).toEqualTypeOf<{ personId: string; route: PersonData['route'] }>()
+          expectTypeOf(params).toEqualTypeOf<{ ctx: undefined; submissionId: string }>()
+
+          return {
+            seen: `${data.personId}:${data.route}:${params.submissionId}`,
+          }
+        }
+      )
+      .build()
+
+    const result = flow.run({
+      person: { id: 'p1c', name: 'Ada', age: 31 },
+      route: 'approve',
+      checks: [],
+    })
+
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'ok',
+      stepResults: [{ id: 'FNINPUT-1', result: { seen: 'p1c:approve:p1c' } }],
+    })
+  })
+
   it('parses status, stores the remaining payload on the step result, and supports result remapping', () => {
     const rejectMinor: StepId = {
       id: 'AGE-2',
       description: 'Reject minors',
-      fn: ({ person }) =>
+      fn: ({ person }, _params) =>
         stepResult({
           status: person.age >= 18 ? 'ok' : 'error',
           reason: person.age >= 18 ? 'adult' : 'minor',
@@ -278,7 +325,7 @@ describe('structuredFlow core execution', () => {
         {
           id: 'THROW-1',
           description: 'Convert exception to error',
-          fn: ({ route }) => {
+          fn: ({ route }, _params) => {
             if (route === 'reject') {
               throw new Error('boom')
             }
@@ -293,7 +340,7 @@ describe('structuredFlow core execution', () => {
           id: 'AFTER-1',
           description: 'Still runs after remapped exception',
         },
-        ({ checks }) => ({
+        ({ checks }, _params) => ({
           checksSeen: checks.length,
         })
       )
@@ -322,7 +369,7 @@ describe('structuredFlow core execution', () => {
       .step({
         id: 'STOP-1',
         description: 'Stop rejected requests',
-        fn: ({ route }) =>
+        fn: ({ route }, _params) =>
           stepResult({
             status: route === 'reject' ? 'stop' : 'ok',
             decision: route,
@@ -333,7 +380,7 @@ describe('structuredFlow core execution', () => {
           id: 'AFTER-2',
           description: 'Skipped after stop',
         },
-        () => ({
+        (_data, _params) => ({
           unreachable: true,
         })
       )
@@ -360,7 +407,7 @@ describe('structuredFlow core execution', () => {
       .step({
         id: 'ASYNC-1',
         description: 'Load score',
-        fn: async ({ person }) => ({
+        fn: async ({ person }, _params) => ({
           score: person.age * 2,
         }),
       })
@@ -369,7 +416,7 @@ describe('structuredFlow core execution', () => {
           id: 'ASYNC-2',
           description: 'Approve score',
         },
-        async ({ person, checks }) =>
+        async ({ person, checks }, _params) =>
           stepResult({
             approved: person.age >= 18 && checks.includes('audit'),
           })
@@ -406,7 +453,7 @@ describe('structuredFlow core execution', () => {
           id: 'AFTER-PROMISE',
           description: 'Skipped after runtime promise',
         },
-        () => ({
+        (_data, _params) => ({
           reached: true,
         })
       )
@@ -434,7 +481,7 @@ describe('structuredFlow core execution', () => {
       .step({
         id: 'CONVERT-1',
         description: 'Attach description',
-        fn: () => ({
+        fn: (_data, _params) => ({
           seen: true,
         }),
       })
@@ -465,15 +512,18 @@ describe('structuredFlow core execution', () => {
         id: 'TYPE-1',
         description: 'Uses a subset of ctx',
       },
-      ({ person }) => ({
+      ({ person }, _params) => ({
         seen: person.id,
       })
     )
 
-    // @ts-expect-error invalid ctx contract
-    builder.step({ id: 'TYPE-2', description: 'Invalid ctx access' }, ({ missing }: { missing: number }) => ({
-      seen: missing,
-    }))
+    builder.step(
+      { id: 'TYPE-2', description: 'Invalid ctx access' },
+      // @ts-expect-error invalid step data contract
+      ({ missing }: { missing: number }, _params: { ctx: undefined }) => ({
+        seen: missing,
+      })
+    )
 
     expectTypeOf(builder.build().run).toBeFunction()
   })
