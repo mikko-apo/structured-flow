@@ -1,14 +1,22 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
-import { collectFailedStepIds, convertResultNode, type FlowResult, renderProcessAsMermaidGraph } from '../index.ts'
+import {
+  convertResultNode,
+  type FlattenedFailedStepResult,
+  flattenFailedStepResults,
+  type FlowResult,
+  renderProcessAsMermaidGraph,
+} from '../index.ts'
 
 type GeneratedBlockKind = 'json' | 'mermaid' | 'html-table'
 type ConvertedStepResult = {
-  id: string
+  id?: string
+  ruleId?: string
+  name?: string
   description?: string
   status: 'ok' | 'skip' | 'stop' | 'error' | 'exception'
   originalStatus?: 'ok' | 'skip' | 'stop' | 'error' | 'exception'
-  result?: Record<string, unknown>
+  variables?: Record<string, unknown>
   selectedBranchKeys?: PropertyKey[]
   branches?: ConvertedBranchStepFlowResult[]
 }
@@ -32,8 +40,10 @@ type FlowLike = {
 }
 
 type FlowStepInfo = {
-  id: string
+  id?: string
+  rawId?: unknown
   options?: {
+    name?: string
     description?: string
   }
   branches?: Record<PropertyKey, FlowLike>
@@ -148,7 +158,7 @@ type DemoRender<InitialCtx extends object> = {
   demo: DocumentationDemo<InitialCtx>
   result: FlowResult
   convertedResult: ConvertedFlowResult
-  failedStepIds: string[]
+  failedStepResults: FlattenedFailedStepResult[]
 }
 
 function escapeMarkdownCodeBlock(value: string): string {
@@ -198,9 +208,34 @@ function getStepDescription(step: Pick<FlowStepInfo, 'options'>): string | undef
 function defaultFormatter(node: FlowStepInfo, flowId: string): FormattedStepItem {
   void flowId
   return {
-    title: node.id,
+    title: node.options?.name ?? node.id ?? '',
     description: getStepDescription(node),
   }
+}
+
+function formatRuleId(ruleId: unknown): string | undefined {
+  if (typeof ruleId === 'string') {
+    return ruleId
+  }
+
+  return ruleId != null && typeof ruleId === 'object' && 'id' in ruleId && typeof ruleId.id === 'string'
+    ? ruleId.id
+    : undefined
+}
+
+function isBranchStep(step: Pick<FlowStepInfo, 'branches'> | Pick<ConvertedStepResult, 'branches'>): boolean {
+  return step.branches != null
+}
+
+function renderStepTitleWithMetadata(stepResult: ConvertedStepResult): string {
+  const title = String(stepResult.name ?? stepResult.id)
+  const ruleId = stepResult.ruleId
+  const metadataHtml =
+    ruleId === undefined
+      ? ''
+      : `<div style="margin-top:2px;color:#475569;font-size:12px;">${escapeHtml(`ruleId: ${ruleId}`)}</div>`
+
+  return `${escapeHtml(title)}${metadataHtml}`
 }
 
 function describeFunction(fn: { toString(): string }) {
@@ -298,6 +333,15 @@ function renderThreeColumnHtml(firstHtml: string, secondHtml: string, thirdHtml:
   ].join('')
 }
 
+function renderTwoColumnHtml(firstHtml: string, secondHtml: string): string {
+  return [
+    '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start;">',
+    `<div>${firstHtml}</div>`,
+    `<div>${secondHtml}</div>`,
+    '</div>',
+  ].join('')
+}
+
 function renderStatusBadge(result: string): string {
   const styles =
     result === 'ok'
@@ -340,10 +384,10 @@ function renderOutcomeBadge(result: { status: string; stepResults: Array<{ statu
   return renderStatusBadge(badgeType).replace(`>${escapeHtml(badgeType)}<`, `>${escapeHtml(label)}<`)
 }
 
-function renderStepPayload(stepResult: Pick<ConvertedStepResult, 'result'>): string {
-  return stepResult.result == null || Object.keys(stepResult.result).length === 0
+function renderStepPayload(stepResult: Pick<ConvertedStepResult, 'variables'>): string {
+  return stepResult.variables == null || Object.keys(stepResult.variables).length === 0
     ? ''
-    : JSON.stringify(stepResult.result)
+    : JSON.stringify(stepResult.variables)
 }
 
 function renderBranchStepDetails(stepResults: ConvertedBranchStepFlowResult['stepResults'], depth: number): string {
@@ -354,7 +398,7 @@ function renderBranchStepDetails(stepResults: ConvertedBranchStepFlowResult['ste
   return stepResults
     .map(
       (stepResult) => `<div style="margin-top:4px;padding-left:${depth * 12}px;">
-<div>${escapeHtml(`${String(stepResult.id)}: ${formatDescription(stepResult.description)}`)} ${renderStatusBadge(String(stepResult.status))}</div>
+<div>${renderStepTitleWithMetadata(stepResult)}${escapeHtml(`: ${formatDescription(stepResult.description)}`)} ${renderStatusBadge(String(stepResult.status))}</div>
 ${renderStepPayload(stepResult) === '' ? '' : `<div style="margin-top:2px;color:#475569;">${escapeHtml(renderStepPayload(stepResult))}</div>`}
 ${renderBranchDetails(stepResult.branches, depth + 1)}
 </div>`
@@ -382,12 +426,12 @@ ${stepHtml}
 function renderResultTable(
   markerId: string,
   result: Pick<ConvertedFlowResult, 'status' | 'stepResults'>,
-  failedStepIds: string[]
+  failedStepResults: readonly FlattenedFailedStepResult[]
 ): string {
   const rowsHtml = result.stepResults
     .map(
       (stepResult) => `<tr>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(String(stepResult.id))}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderStepTitleWithMetadata(stepResult)}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(formatDescription(stepResult.description))}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderStatusBadge(String(stepResult.status))}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(renderStepPayload(stepResult))}</td>
@@ -396,10 +440,33 @@ function renderResultTable(
     )
     .join('')
 
+  const failedStepRows =
+    failedStepResults.length === 0
+      ? '<tr><td colspan="6" style="padding:8px;border-bottom:1px solid #d0d7de;color:#64748b;">No failed step results.</td></tr>'
+      : failedStepResults
+          .map(
+            (failedStepResult) => `<tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(failedStepResult.path ?? '')}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(failedStepResult.id)}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${renderStatusBadge(failedStepResult.status)}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(formatDescription(failedStepResult.description))}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(failedStepResult.message ?? '')}</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">${escapeHtml(JSON.stringify(failedStepResult.variables))}</td>
+</tr>`
+          )
+          .join('')
+
+  const failedStepResultsHtml = [
+    '<p><strong>flattenFailedStepResults()</strong></p>',
+    '<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">',
+    '<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>',
+    `<tbody>${failedStepRows}</tbody>`,
+    '</table>',
+  ].join('\n')
+
   return [
-    `<p><strong>Overall outcome:</strong> ${renderOutcomeBadge(result as unknown as { status: string; stepResults: Array<{ status: string }> })}<br><strong>Failed steps:</strong> ${escapeHtml(
-      failedStepIds.length === 0 ? 'none' : failedStepIds.join(', ')
-    )}</p>`,
+    `<p><strong>Overall outcome:</strong> ${renderOutcomeBadge(result as unknown as { status: string; stepResults: Array<{ status: string }> })}</p>`,
+    failedStepResultsHtml,
     wrapGeneratedBlock(
       markerId,
       'html-table',
@@ -539,7 +606,7 @@ function formatStep(
   const formatted = formatter == null ? defaultFormatter(step, flow.id) : formatter(step, flow.id)
 
   return {
-    id: step.id,
+    id: step.id ?? '',
     title: formatted.title,
     description: formatted.description,
   }
@@ -656,10 +723,13 @@ function renderTableStepLabel(
   step: FlowStepInfo
 ): string {
   const formatted = formatStep(formatter, flow, step)
+  const ruleId = isBranchStep(step) ? formatRuleId(step.rawId) : step.id
 
   return [
     `<div><strong>${escapeHtml(formatted.title)}</strong></div>`,
-    `<div style="margin-top:2px;color:#475569;font-size:12px;">${escapeHtml(formatted.id)}</div>`,
+    ruleId === undefined
+      ? ''
+      : `<div style="margin-top:2px;color:#475569;font-size:12px;">${escapeHtml(isBranchStep(step) ? `ruleId: ${ruleId}` : ruleId)}</div>`,
     formatted.description == null
       ? ''
       : `<div style="margin-top:4px;color:#334155;font-size:13px;">${escapeHtml(formatted.description)}</div>`,
@@ -762,7 +832,7 @@ function renderDemoResultParts(
   runInput: unknown,
   result: Pick<FlowResult, 'status' | 'stepResults'>,
   convertedResult: ConvertedFlowResult,
-  failedStepIds: string[]
+  failedStepResults: readonly FlattenedFailedStepResult[]
 ) {
   return {
     initJson: [
@@ -773,11 +843,11 @@ function renderDemoResultParts(
       '<p><strong>Resulting JSON</strong></p>',
       renderJsonCodeBlock(`${markerId}-result`, {
         ...convertedResult,
-        failedStepIds,
+        flattenFailedStepResults: failedStepResults,
       }),
     ].join('\n'),
     resultMermaid: renderMermaidBlock(markerId, renderProcessAsMermaidGraph(result)),
-    resultHtml: renderResultTable(markerId, convertedResult, failedStepIds),
+    resultHtml: renderResultTable(markerId, convertedResult, failedStepResults),
   }
 }
 
@@ -786,9 +856,9 @@ function renderDemoResultSection(
   runInput: unknown,
   result: Pick<FlowResult, 'status' | 'stepResults'>,
   convertedResult: ConvertedFlowResult,
-  failedStepIds: string[]
+  failedStepResults: readonly FlattenedFailedStepResult[]
 ): string {
-  const parts = renderDemoResultParts(markerId, runInput, result, convertedResult, failedStepIds)
+  const parts = renderDemoResultParts(markerId, runInput, result, convertedResult, failedStepResults)
 
   return renderThreeColumnHtml(
     renderMarkdownPane([parts.initJson, '', parts.resultJson].join('\n')),
@@ -816,15 +886,16 @@ function createNestedFlowExample(
     }
   }
 
+  const nestedFlowId = firstStep.id ?? firstStep.options?.name ?? 'branch-flow'
   const nestedFlow: DocumentationFlow<any> = {
-    id: firstStep.id,
-    title: firstStep.id,
+    id: nestedFlowId,
+    title: nestedFlowId,
     flow,
   }
   const formattedStep = formatStep(formatter, nestedFlow, firstStep)
 
   return {
-    id: firstStep.id,
+    id: nestedFlowId,
     title: formattedStep.title,
     description: formattedStep.description,
     flow,
@@ -1222,8 +1293,7 @@ async function renderGeneratedExample(
       templatePlaceholderToken(staticGraphPlaceholder(flow.id)),
       wrapWithAnchor(
         exampleStaticGraphAnchor,
-        renderThreeColumnHtml(
-          '<p><strong>Result JSON</strong><br>No run result yet.</p>',
+        renderTwoColumnHtml(
           renderMarkdownPane(
             renderMermaidBlock(
               replaceKeyToMarkerId(staticGraphPlaceholder(flow.id)),
@@ -1258,7 +1328,7 @@ async function renderGeneratedExample(
       runInput,
       rendered.result,
       rendered.convertedResult,
-      rendered.failedStepIds
+      rendered.failedStepResults
     )
 
     if (templateIncludes(nextMarkdown, demoFullTablePlaceholder(flow.id, rendered.demo.id))) {
@@ -1266,7 +1336,13 @@ async function renderGeneratedExample(
         templatePlaceholderToken(demoFullTablePlaceholder(flow.id, rendered.demo.id)),
         wrapWithAnchor(
           anchorForDemoPart(formatter, flow, rendered.demo, 'full-table'),
-          renderDemoResultSection(markerId, runInput, rendered.result, rendered.convertedResult, rendered.failedStepIds)
+          renderDemoResultSection(
+            markerId,
+            runInput,
+            rendered.result,
+            rendered.convertedResult,
+            rendered.failedStepResults
+          )
         )
       )
     }
@@ -1313,12 +1389,12 @@ async function renderAllDemoRenders(
           (flow.demos ?? []).map(async (demo) => {
             const result =
               demo.ctx === undefined ? await flow.flow.run(demo.init) : await flow.flow.run(demo.init, demo.ctx)
-            const failedStepIds = collectFailedStepIds(result.stepResults)
+            const failedStepResults = flattenFailedStepResults(result.stepResults)
             return {
               demo,
               result,
               convertedResult: convertResultNode(result) as ConvertedFlowResult,
-              failedStepIds,
+              failedStepResults,
             } satisfies DemoRender<any>
           })
         )

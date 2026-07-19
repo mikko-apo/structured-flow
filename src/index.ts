@@ -1,8 +1,9 @@
-export { createAsyncFlow, createSyncFlow, error, exception, ok, ruleId, skip, step, stop } from './structuredFlow.ts'
+export { createAsyncFlow, createSyncFlow, error, exception, ok, rule, ruleId, skip, stop } from './structuredFlow.ts'
 
-export { BranchStepFlowResult, FlowResult, RuleId, Step, StepFnResult, StepResult } from './flowClasses.ts'
+export { BranchStepFlowResult, FlowResult, Rule, RuleId, StepFnResult, StepResult } from './flowClasses.ts'
 export type { StepStatus } from './flowClasses.ts'
 
 export { renderProcessAsMermaidGraph } from './mermaidRenderer.ts'
 
-export { collectFailedStepIds, convertResultNode } from './resultUtils.ts'
+export { convertResultNode, flattenFailedStepResults } from './resultUtils.ts'
+export type { FlattenedFailedStepResult } from './resultUtils.ts'

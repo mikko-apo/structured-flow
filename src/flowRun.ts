@@ -80,29 +80,39 @@ function mergeStepStatuses(results: readonly StepStatus[]) {
   )
 }
 
-function assertValidBranchKey(stepId: string, key: PropertyKey, branches: Record<PropertyKey, FlowLike>) {
+type BranchSelection = {
+  keys: readonly PropertyKey[]
+}
+
+function assertValidBranchKey(stepLabel: string, key: PropertyKey, branches: Record<PropertyKey, FlowLike>) {
   if (!(key in branches)) {
-    throw new Error(`Flow branch "${stepId}" selected unknown flow key "${String(key)}"`)
+    throw new Error(`Flow branch "${stepLabel}" selected unknown flow key "${String(key)}"`)
   }
 }
 
 function normalizeBranchSelection(
-  stepId: string,
+  stepLabel: string,
   selection: PropertyKey | readonly PropertyKey[] | StepStatus
-): readonly PropertyKey[] | StepStatus {
+): BranchSelection | StepStatus {
   if (Array.isArray(selection)) {
     if (selection.length === 0) {
-      throw new Error(`Flow branch "${stepId}" selected no flow keys; return a step result instead`)
+      throw new Error(`Flow branch "${stepLabel}" selected no flow keys; return a step result instead`)
     }
 
-    return selection
+    return { keys: selection }
   }
 
   if (isStepStatus(selection)) {
     return selection
   }
 
-  return [selection as PropertyKey]
+  return { keys: [selection as PropertyKey] }
+}
+
+function selectsAllBranches(selectedKeys: readonly PropertyKey[], branches: Record<PropertyKey, FlowLike>) {
+  const branchKeys = Reflect.ownKeys(branches)
+
+  return branchKeys.length > 0 && selectedKeys.length === branchKeys.length && branchKeys.every((key) => selectedKeys.includes(key))
 }
 
 function applyMap(
@@ -246,6 +256,7 @@ function createBranchStepResult(
   branchResults: BranchStepFlowResult[] = []
 ) {
   const selectedKeySet = new Set(selectedKeys)
+  const selectedEveryBranch = selectsAllBranches(selectedKeys, step.branches)
   const status = applyStatusHandling(rawStatus, step.options?.status)
   const originalStatus = rawStatus !== status ? rawStatus : undefined
   const skippedBranches = getOwnEntries(step.branches)
@@ -263,9 +274,12 @@ function createBranchStepResult(
     step,
     status,
     undefined,
-    selectedKeys.length === 0 ? undefined : [...selectedKeys],
+    selectedKeys.length === 0 || selectedEveryBranch ? undefined : [...selectedKeys],
     [...branchResults, ...skippedBranches],
-    originalStatus
+    originalStatus,
+    step.options?.path,
+    undefined,
+    undefined
   )
 }
 
@@ -369,20 +383,21 @@ function travel(
 
     if (step instanceof StepBranchInfo) {
       try {
-        const selection = normalizeBranchSelection(step.id, invokeBranchSelect(step, input))
+        const stepLabel = step.options?.name ?? step.id ?? 'branch'
+        const selection = normalizeBranchSelection(stepLabel, invokeBranchSelect(step, input))
 
         if (isStepStatus(selection)) {
           finishStep(state, createBranchStepResult(step, selection))
           continue
         }
 
-        for (const key of selection) {
-          assertValidBranchKey(step.id, key, step.branches)
+        for (const key of selection.keys) {
+          assertValidBranchKey(stepLabel, key, step.branches)
         }
 
         state.pendingBranch = {
           step,
-          selectedKeys: [...selection],
+          selectedKeys: [...selection.keys],
           nextBranchIndex: 0,
           branchResults: [],
           data: input.flowData,

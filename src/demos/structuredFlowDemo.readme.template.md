@@ -4,13 +4,20 @@ Model business rules and validation pipelines with typed steps, branches, and ex
 
 Structured flow gives you:
 
-- Step-by-step execution with readable ids and descriptions
-- Typed `data` and optional `ctx` across the whole flow
-- Branching into child flows without leaking child payloads back to the parent flow
-- Recorded execution results that can be rendered as HTML tables or Mermaid graphs
-- Metadata helpers for reusable step ids and descriptions
-- Flow-level metadata resolution for final step ids and descriptions
-- Runtime payload remapping through `map`
+- Simple API for modeling complex structures
+- Automatically generated documentation and graphs of the validation flow. You get documentation before execution:
+  graphs and HTML-tables. And after execution you can render graphs based on logged events
+- A way to define a flow of steps with a human-readable API and descriptions
+- API that enforces correctness and scales to hundreds of rules
+- Ready made tools to visualize and document the flow before and after execution
+  - Mermaid graphs: the flow and flow results
+  - Markdown HTML tables
+- Evidence of processesed rules
+- Full type enforcement: types are enforced for rule functions and flows
+- Promotes splitting the program code in to smaller functions. Instead of a deep nested validation logic, there's small
+  functions that are called by the flow
+
+Contents:
 
 {{TOC}}
 
@@ -31,27 +38,32 @@ createSyncFlow<Data>({
   map,
 })
 
-createSyncFlow(stepId, stepFn, stepOptions?)
-createAsyncFlow(stepId, stepFn, stepOptions?)
+createSyncFlow(stepId, stepFn, stepOptions ?)
+createAsyncFlow(stepId, stepFn, stepOptions ?)
 
-createSyncFlow(select, branches, branchOptions?)
-createAsyncFlow(select, branches, branchOptions?)
+createSyncFlow(select, branches, branchOptions ?)
+createAsyncFlow(select, branches, branchOptions ?)
+
+createSyncFlow(branches, branchOptions ?)
+createAsyncFlow(branches, branchOptions ?)
 ```
 
 Use the empty generic form when your first `step()` should define the flow. Use the config form when you want flow-level
 metadata, a flow-level `resolver`, or a flow-level `map`. Use the positional forms for short one-step or one-branch
-flows.
+flows. When a branch is created without a selector, every branch flow runs.
 
 ## Flow options
 
 Flow config currently supports:
 
-- `name?: string`: stored on the built flow as metadata
-- `description?: string`: stored on the built flow as metadata
-- `resolver?: (stepId) => string | RuleId | { id: string; description?: string }`: maps each `string`, `RuleId`, or `Step` id to its final recorded metadata
-- `map?: ({ id, data, ctx, stepOptions, params }) => object`: augments callback params, and can optionally return `fnInput: [data, params]` to override the callback signature
+- `name?: string`: stored on the flow as metadata
+- `description?: string`: stored on the flow as metadata
+- `resolver?: (stepId) => string | RuleId | { id: string; description?: string }`: maps each `string`, `RuleId`, or
+  `Rule` id to its final recorded metadata
+- `map?: ({ id, data, ctx, stepOptions, params }) => object`: augments callback params, and can optionally return
+  `fnInput: [data, params]` to override the callback signature
 
-`resolver` is metadata-only and is configured on the flow builder. `step()` and `branch()` do not have resolver options.
+`resolver` is metadata-only and is configured on the flow. `step()` and `branch()` do not have resolver options.
 `map` is runtime-only. By default it augments the second callback parameter while `data` remains the flow's accumulated
 data object. When a map returns `fnInput: [data, params]`, that tuple becomes the callback signature for that node.
 
@@ -61,18 +73,25 @@ data object. When a map returns `fnInput: [data, params]`, that tuple becomes th
 
 ```ts
 {
-  description?: string
-  status?: {
-    error?: 'ignore' | 'exception'
-    exception?: 'error'
+  description ? : string
+  status ? : {
+    error? : 'ignore' | 'exception'
+    exception? : 'error'
   }
-  map?: ({ id, data, ctx, stepOptions, params }) => object & {
-    fnInput?: [data: object, params: object]
-  }
+  map ? : ({id, data, ctx, stepOptions, params}) => object & {
+    fnInput? : [data
+:
+  object, params
+:
+  object
+]
+}
 }
 ```
 
 The flow-level `map` runs before a step-level or branch-level `map`.
+For `branch()`, `name` is display-only. Set `ruleId` only when the branch wrapper itself should have a public id and be
+included by `flattenFailedStepResults()` when it fails.
 
 ## Runtime behavior
 
@@ -82,7 +101,8 @@ The flow-level `map` runs before a step-level or branch-level `map`.
 - With `map`, its returned fields are merged into `params` and `params.ctx` stays available
 - With `map().fnInput`, the callback is invoked with that explicit `[data, params]` tuple instead
 - `withContext<Ctx>()` enables `flow.run(data, ctx)` and types downstream callbacks accordingly
-- Plain object returns record `ok` payloads; use `ok()`, `error()`, `stop()`, `skip()`, or `exception()` for explicit statuses
+- Plain object returns record `ok` payloads; use `ok()`, `error()`, `stop()`, `skip()`, or `exception()` for explicit
+  statuses
 
 Status handling:
 
@@ -98,15 +118,16 @@ Status handling:
 
 - `result.status` is the overall flow status
 - `result.stepResults` contains recorded `StepResult` entries in execution order
-- branch steps include `selectedBranchKeys` and nested `branches`
-- helper utilities such as `collectFailedStepIds()` and `convertResultNode()` can flatten or normalize result inspection
+- branch steps include `selectedBranchKeys` only when a selector picks a subset; branches that run every child flow only include nested `branches`
+- helper utilities such as `flattenFailedStepResults()` and `convertResultNode()` can flatten or normalize result
+  inspection
 
 # Examples
 
 ## Core API Example
 
-This example uses the short positional form. The first step infers the flow input type and later steps build on the
-returned data.
+This example defines reusable `rule()` helpers, builds a `personChecks` flow from them, and composes that flow into a
+larger household flow with branches.
 
 {{CORE_API_CODE_BLOCK}}
 
@@ -118,13 +139,21 @@ returned data.
 
 {{CORE_API_STATIC_GRAPH}}
 
-### Example Run
+### No Kids Run
 
-{{CORE_API_ok_FULL_TABLE}}
+{{CORE_API_no_kids_FULL_TABLE}}
+
+### Two Kids Run
+
+{{CORE_API_two_kids_FULL_TABLE}}
+
+### Missing Name Run
+
+{{CORE_API_missing_name_FULL_TABLE}}
 
 ## Flow Metadata Example
 
-This flow is created with flow-level `name` and `description`. Those values are stored on the built flow and can be used
+This flow is created with flow-level `name` and `description`. Those values are stored on the flow and can be used
 by surrounding tooling or documentation.
 
 {{FLOW_METADATA_CODE_BLOCK}}

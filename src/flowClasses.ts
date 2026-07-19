@@ -24,14 +24,19 @@ export type StepOptions = {
   map?: unknown
 }
 
+export type StepFnResultRuleId = string | { id: string; description?: string }
+
 export type BranchOptions = {
+  ruleId?: StepFnResultRuleId
   name?: string
   description?: string
+  path?: string
   status?: StepOptionsStatusHandling
   map?: unknown
 }
 
 export type StepFnResultOptions = {
+  ruleId?: StepFnResultRuleId
   path?: string
   message?: string
   variables?: Record<string, unknown>
@@ -39,6 +44,7 @@ export type StepFnResultOptions = {
 }
 
 export class StepFnResult {
+  readonly ruleId?: StepFnResultRuleId
   readonly path?: string
   readonly message?: string
   readonly variables: Record<string, unknown>
@@ -48,13 +54,27 @@ export class StepFnResult {
     readonly status: StepStatus,
     params: StepFnResultOptions = {}
   ) {
+    this.ruleId = params.ruleId
     this.path = params.path
     this.message = params.message
     this.variables = params.variables ?? {}
     this.results = params.results
   }
 
-  addResult(result: StepFnResult): this {
+  addResult(result: StepFnResult): this
+  addResult(ruleId: StepFnResultRuleId, result: StepFnResult): this
+  addResult(ruleIdOrResult: StepFnResultRuleId | StepFnResult, maybeResult?: StepFnResult): this {
+    const result =
+      maybeResult === undefined
+        ? (ruleIdOrResult as StepFnResult)
+        : new StepFnResult(maybeResult.status, {
+            ruleId: ruleIdOrResult as StepFnResultRuleId,
+            path: maybeResult.path,
+            message: maybeResult.message,
+            variables: maybeResult.variables,
+            results: maybeResult.results,
+          })
+
     this.results = [...(this.results ?? []), result]
     return this
   }
@@ -70,16 +90,16 @@ export class RuleId<I = undefined> {
   ) {}
 }
 
-export class Step<
-  StepFnInputSignature extends (...args: any[]) => any = (...args: any[]) => any,
-  StepFnAsync extends boolean = boolean,
+export class Rule<
+  RuleFnInputSignature extends (...args: any[]) => any = (...args: any[]) => any,
+  RuleFnAsync extends boolean = boolean,
   I = undefined,
 > extends RuleId<I> {
-  declare readonly __stepFnAsyncType__: StepFnAsync
+  declare readonly __ruleFnAsyncType__: RuleFnAsync
 
   constructor(
     id: string,
-    readonly stepFn: StepFnInputSignature,
+    readonly stepFn: RuleFnInputSignature,
     params: { path?: string; description?: string; info?: I } = {}
   ) {
     super(id, params.description, params.info)
@@ -112,7 +132,7 @@ export type FlowLike = {
 
 export class StepBranchInfo {
   constructor(
-    readonly id: string,
+    readonly id: string | undefined,
     readonly rawId: unknown,
     readonly select: (data: object, params: object) => BranchSelectFnReturnValue,
     readonly branches: Record<PropertyKey, FlowLike>,
@@ -126,7 +146,7 @@ export class StepResult {
   constructor(
     readonly stepInfo: FlowStepInfo,
     readonly status: StepStatus,
-    readonly result?: Record<string, unknown>,
+    readonly variables?: Record<string, unknown>,
     readonly selectedBranchKeys?: PropertyKey[],
     readonly branches?: BranchStepFlowResult[],
     readonly originalStatus?: StepStatus,

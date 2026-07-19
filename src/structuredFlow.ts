@@ -7,7 +7,7 @@ import {
   type StepFnResultOptions,
   StepInfo,
   RuleId,
-  Step,
+  Rule,
   type FlowResult,
   type FlowStepInfo,
   type StepOptions,
@@ -22,9 +22,8 @@ type Expand<T> = T extends infer O ? { [K in keyof O]: O[K] } : never
 type BranchSelectFnReturnValue<Key extends PropertyKey> = Key | readonly Key[] | StepStatus
 
 type CompatibleBranchFlow<Data extends object, Ctx> =
-  | Flow<Data, any, undefined>
-  | FlowBuilder<Data, any, any, undefined, any, any>
-  | ([Ctx] extends [undefined] ? never : Flow<Data, any, Ctx> | FlowBuilder<Data, any, any, Ctx, any, any>)
+  | Flow<Data, any, any, undefined, any, any>
+  | ([Ctx] extends [undefined] ? never : Flow<Data, any, any, Ctx, any, any>)
 
 type BranchFlowMap<Data extends object, Ctx, SelectedKey extends PropertyKey = PropertyKey> = Record<
   SelectedKey,
@@ -90,19 +89,19 @@ type ValidateCallbackInput<Fn, Data extends object, Params extends object> = Fn 
       : never
     : never
   : never
-type StepAsyncFlag<Fn extends (...args: any[]) => any> = ReturnType<Fn> extends Promise<any> ? true : false
-type StepAllowedInMode<TStep extends Step<any, any, any>, Mode extends AsyncMode> = Mode extends 'sync'
-  ? TStep extends Step<any, true, any>
+type RuleAsyncFlag<Fn extends (...args: any[]) => any> = ReturnType<Fn> extends Promise<any> ? true : false
+type RuleAllowedInMode<TRule extends Rule<any, any, any>, Mode extends AsyncMode> = Mode extends 'sync'
+  ? TRule extends Rule<any, true, any>
     ? never
-    : TStep
-  : TStep
+    : TRule
+  : TRule
 
 type MetadataResolution = {
   id: string
   description?: string
 }
 
-type ResolvableStepId = string | RuleId<any> | Step<any, any, any>
+type ResolvableStepId = string | RuleId<any> | Rule<any, any, any>
 
 type FlowResolver = (stepId: ResolvableStepId) => string | RuleId<any> | { id: string; description?: string }
 
@@ -127,6 +126,7 @@ type ValidateMapInput<Mapper, StepId, Data extends object, Ctx> = Mapper extends
   : never
 
 type FlowRunResult<Mode extends 'sync' | 'async'> = Mode extends 'sync' ? FlowResult : Promise<FlowResult>
+type FactoryStepFn = (data: any, params: { ctx: undefined }) => MaybePromise<object | boolean>
 
 type CreateFlowOptions<
   Data extends object,
@@ -180,6 +180,19 @@ function resolveOptions(
   }
 }
 
+function isCreateFlowOptions(value: unknown): value is CreateFlowOptions<any, any> {
+  if (value == null || typeof value !== 'object') {
+    return false
+  }
+
+  const keys = Reflect.ownKeys(value)
+
+  return (
+    keys.length === 0 ||
+    keys.some((key) => key === 'name' || key === 'description' || key === 'resolver' || key === 'map')
+  )
+}
+
 function stepFnResult(status: StepStatus, params?: StepFnResultOptions): StepFnResult {
   return new StepFnResult(status, params)
 }
@@ -208,18 +221,21 @@ export function ruleId<I = undefined>(id: string, params: { description?: string
   return new RuleId(id, params.description, params.info)
 }
 
-export function step<I, Fn extends (...args: any[]) => any>(
+export function rule<I, Fn extends (...args: any[]) => any>(
   id: string,
   stepFn: Fn,
   params?: { path?: string; description?: string; info?: I }
-): Step<Fn, StepAsyncFlag<Fn>, I> {
-  return new Step(id, stepFn, params)
+): Rule<Fn, RuleAsyncFlag<Fn>, I> {
+  return new Rule(id, stepFn, params)
 }
 
 class Flow<
   RunData extends object = object,
+  StepId = string,
   Mode extends AsyncMode = AsyncMode,
   RunCtx = undefined,
+  StepData extends object = RunData,
+  StepParams extends object = { ctx: RunCtx },
 > {
   declare readonly __flowRunDataType__: (data: RunData) => RunData
   declare readonly __flowRunCtxType__: (ctx: RunCtx) => RunCtx
@@ -227,10 +243,11 @@ class Flow<
   constructor(
     readonly steps: readonly FlowStepInfo[],
     readonly asyncMode: Mode,
-    readonly allowsContext: boolean,
+    private readonly resolver?: FlowResolver,
+    readonly map?: AnyStepMap,
     readonly name?: string,
     readonly description?: string,
-    readonly map?: AnyStepMap
+    readonly allowsContext = false
   ) {}
 
   run(...args: RunCtx extends undefined ? [data: RunData] : [data: RunData, ctx: RunCtx]): FlowRunResult<Mode> {
@@ -250,31 +267,9 @@ class Flow<
 
     return asyncRun(this, data, ctx) as FlowRunResult<Mode>
   }
-}
 
-class FlowBuilder<
-  RunData extends object = object,
-  StepId = string,
-  Mode extends AsyncMode = AsyncMode,
-  RunCtx = undefined,
-  StepData extends object = RunData,
-  StepParams extends object = { ctx: RunCtx },
-> {
-  declare readonly __flowRunDataType__: (data: RunData) => RunData
-  declare readonly __flowRunCtxType__: (ctx: RunCtx) => RunCtx
-
-  constructor(
-    readonly steps: readonly FlowStepInfo[],
-    private readonly asyncMode: Mode,
-    private readonly resolver?: FlowResolver,
-    private readonly map?: AnyStepMap,
-    readonly name?: string,
-    readonly description?: string,
-    private readonly allowsContext = false
-  ) {}
-
-  private appendStep(newStep: FlowStepInfo): FlowBuilder<RunData, StepId, Mode, RunCtx, StepData, StepParams> {
-    return new FlowBuilder<RunData, StepId, Mode, RunCtx, StepData, StepParams>(
+  private appendStep(newStep: FlowStepInfo): Flow<RunData, StepId, Mode, RunCtx, StepData, StepParams> {
+    return new Flow<RunData, StepId, Mode, RunCtx, StepData, StepParams>(
       [...this.steps, newStep],
       this.asyncMode,
       this.resolver,
@@ -286,7 +281,7 @@ class FlowBuilder<
   }
 
   withContext<NewCtx>() {
-    return new FlowBuilder<RunData, StepId, Mode, NewCtx, StepData, ReplaceStepCtx<StepParams, NewCtx>>(
+    return new Flow<RunData, StepId, Mode, NewCtx, StepData, ReplaceStepCtx<StepParams, NewCtx>>(
       this.steps,
       this.asyncMode,
       this.resolver,
@@ -302,19 +297,13 @@ class FlowBuilder<
   }
 
   step<
-    TStep extends Step<any, any, any>,
-    Fn extends (...args: any[]) => any = TStep extends Step<infer StepFn, any, any> ? StepFn : never,
+    TRule extends Rule<any, any, any>,
+    Fn extends (...args: any[]) => any = TRule extends Rule<infer StepFn, any, any> ? StepFn : never,
   >(
-    stepId: StepAllowedInMode<TStep, Mode> &
-      (ValidateCallbackInput<Fn, StepData, StepParams> extends never ? never : TStep)
-  ): FlowBuilder<
-    RunData,
-    StepId,
-    Mode,
-    RunCtx,
-    StepData,
-    StepParams
-  >
+    rule: RuleAllowedInMode<TRule, Mode> &
+      (ValidateCallbackInput<Fn, StepData, StepParams> extends never ? never : TRule),
+    options?: StepOptions
+  ): Flow<RunData, StepId, Mode, RunCtx, StepData, StepParams>
   step<
     TOptions extends StepOptions | undefined = undefined,
     Id extends StepId | string | RuleId<any> = StepId,
@@ -331,31 +320,32 @@ class FlowBuilder<
           params: StepInputParamsWithMap<TOptions, StepData, StepParams>
         ) => MaybePromise<object>,
   >(
-    stepId: Id,
+    ruleId: Id,
     fn: ValidateStepFn<Fn, Mode>,
     options?: TOptions
-  ): FlowBuilder<
-    RunData,
-    StepId,
-    Mode,
-    RunCtx,
-    StepData,
-    StepParams
-  >
-  step(stepId: StepId | Step<any, any, any>, fnOrOptions?: unknown, maybeOptions?: StepOptions): any {
+  ): Flow<RunData, StepId, Mode, RunCtx, StepData, StepParams>
+  step(
+    ruleOrId: StepId | string | RuleId<any> | Rule<any, any, any>,
+    fnOrOptions?: unknown,
+    maybeOptions?: StepOptions
+  ): any {
     const isFunction = typeof fnOrOptions === 'function'
     const fn = isFunction ? (fnOrOptions as (...args: any[]) => any) : undefined
     const resolvedOptions = (isFunction ? maybeOptions : fnOrOptions) as StepOptions | undefined
-    const defaultFn = fn ?? (stepId instanceof Step ? stepId.stepFn : undefined)
-    const preview = this.previewStep(stepId, resolvedOptions)
+    const defaultFn = fn ?? (ruleOrId instanceof Rule ? ruleOrId.stepFn : undefined)
+    const preview = this.previewStep(ruleOrId, resolvedOptions)
 
     if (defaultFn == null) {
       throw new Error(`Flow step "${preview.id}" is missing a step function`)
     }
 
-    return this.appendStep(new StepInfo(preview.id, stepId, defaultFn as StepInfo['fn'], preview.options))
+    return this.appendStep(new StepInfo(preview.id, ruleOrId, defaultFn as StepInfo['fn'], preview.options))
   }
 
+  branch<
+    SelectedKey extends PropertyKey = PropertyKey,
+    TBranches extends BranchFlowMap<RunData, RunCtx, SelectedKey> = BranchFlowMap<RunData, RunCtx, SelectedKey>,
+  >(branches: TBranches, options?: BranchOptions): Flow<RunData, StepId, Mode, RunCtx, StepData, StepParams>
   branch<
     SelectedKey extends PropertyKey = PropertyKey,
     TBranches extends BranchFlowMap<RunData, RunCtx, SelectedKey> = BranchFlowMap<RunData, RunCtx, SelectedKey>,
@@ -367,67 +357,58 @@ class FlowBuilder<
     select: Select,
     branches: TBranches,
     options?: BranchOptions
-  ): FlowBuilder<
-    RunData,
-    StepId,
-    Mode,
-    RunCtx,
-    StepData,
-    StepParams
-  >
+  ): Flow<RunData, StepId, Mode, RunCtx, StepData, StepParams>
   branch(
-    select: (...args: any[]) => any,
-    branches: Record<PropertyKey, CompatibleBranchFlow<RunData, RunCtx>>,
-    options?: BranchOptions
+    selectOrBranches: ((...args: any[]) => any) | Record<PropertyKey, CompatibleBranchFlow<RunData, RunCtx>>,
+    branchesOrOptions?: Record<PropertyKey, CompatibleBranchFlow<RunData, RunCtx>> | BranchOptions,
+    maybeOptions?: BranchOptions
   ): any {
-    const stepId = options?.name ?? `branch-${this.steps.length + 1}`
-    const preview = this.previewStep(stepId, options)
+    const hasSelect = typeof selectOrBranches === 'function'
+    const branches = (hasSelect ? branchesOrOptions : selectOrBranches) as Record<
+      PropertyKey,
+      CompatibleBranchFlow<RunData, RunCtx>
+    >
+    const options = (hasSelect ? maybeOptions : branchesOrOptions) as BranchOptions | undefined
+    const branchRuleId = options?.ruleId
+    const preview =
+      branchRuleId === undefined
+        ? { id: undefined, options }
+        : (this.previewStep(branchRuleId, options) as { id: string; options?: BranchOptions })
+    const branchLabel = options?.name ?? preview.id ?? 'branch'
     const normalizedBranches = Object.fromEntries(
       getOwnEntries(branches).map(([key, flow]) => {
-        const normalizedFlow = flow instanceof Flow ? flow : flow.build()
-
-        if (this.asyncMode === 'sync' && normalizedFlow.asyncMode === 'async') {
-          throw new Error(`Flow branch "${preview.id}" cannot include async flow "${String(key)}" in sync mode`)
+        if (this.asyncMode === 'sync' && flow.asyncMode === 'async') {
+          throw new Error(`Flow branch "${branchLabel}" cannot include async flow "${String(key)}" in sync mode`)
         }
 
-        if (!this.allowsContext && normalizedFlow.allowsContext) {
+        if (!this.allowsContext && flow.allowsContext) {
           throw new Error(
-            `Flow branch "${preview.id}" cannot include context flow "${String(key)}" without withContext()`
+            `Flow branch "${branchLabel}" cannot include context flow "${String(key)}" without withContext()`
           )
         }
 
-        return [key, normalizedFlow]
+        return [key, flow]
       })
-    ) as Record<PropertyKey, Flow<any, any, any>>
+    ) as Record<PropertyKey, Flow<any, any, any, any, any, any>>
+    const select = hasSelect ? selectOrBranches : () => Reflect.ownKeys(normalizedBranches)
 
     return this.appendStep(
       new StepBranchInfo(
         preview.id,
-        stepId,
+        branchRuleId,
         select as StepBranchInfo['select'],
         normalizedBranches,
         preview.options
       )
     )
   }
-
-  build() {
-    return new Flow<RunData, Mode, RunCtx>(
-      this.steps,
-      this.asyncMode,
-      this.allowsContext,
-      this.name,
-      this.description,
-      this.map
-    )
-  }
 }
 
 type CreateFlowFactory<Mode extends AsyncMode> = {
-  <Data extends object = object>(): FlowBuilder<Data, string, Mode, undefined, Data, { ctx: undefined }>
+  <Data extends object = object>(): Flow<Data, string, Mode, undefined, Data, { ctx: undefined }>
   <Data extends object, Mapper extends StepMapFn<string, Data, undefined> | undefined = undefined>(
     config: CreateFlowOptions<Data, string, undefined, Mapper>
-  ): FlowBuilder<
+  ): Flow<
     Data,
     string,
     Mode,
@@ -437,7 +418,7 @@ type CreateFlowFactory<Mode extends AsyncMode> = {
   >
   <StepId, Data extends object, Mapper extends StepMapFn<StepId, Data, undefined> | undefined = undefined>(
     config: CreateFlowOptions<Data, StepId, undefined, Mapper>
-  ): FlowBuilder<
+  ): Flow<
     Data,
     StepId,
     Mode,
@@ -455,14 +436,11 @@ type CreateFlowFactory<Mode extends AsyncMode> = {
     id: StepId,
     fn: ValidateStepFn<Fn, Mode>,
     config?: Omit<CreateFlowOptions<Data, StepId>, 'map'>
-  ): FlowBuilder<
-    Data,
-    StepId,
-    Mode,
-    undefined,
-    Data,
-    { ctx: undefined }
-  >
+  ): Flow<Data, StepId, Mode, undefined, Data, { ctx: undefined }>
+  <TBranches extends BranchFlowMap<any, undefined>>(
+    branches: TBranches,
+    config?: BranchOptions
+  ): Flow<any, string, Mode, undefined, any, { ctx: undefined }>
   <
     SelectedKey extends PropertyKey,
     TBranches extends BranchFlowMap<Data, undefined, SelectedKey>,
@@ -475,41 +453,52 @@ type CreateFlowFactory<Mode extends AsyncMode> = {
     select: Select,
     branches: TBranches,
     config?: BranchOptions
-  ): FlowBuilder<
-    Data,
-    string,
-    Mode,
-    undefined,
-    Data,
-    { ctx: undefined }
-  >
+  ): Flow<Data, string, Mode, undefined, Data, { ctx: undefined }>
 }
 
-function createFlow<Mode extends AsyncMode>(asyncMode: Mode, ...args: unknown[]) {
-  const builder = new FlowBuilder([], asyncMode)
+function createFlow(asyncMode: AsyncMode, ...args: unknown[]) {
+  const flow = new Flow([], asyncMode)
 
   if (args.length === 0) {
-    return builder
+    return flow
   }
 
   if (args.length === 1) {
-    const [config] = args as [CreateFlowOptions<any, any>]
+    const [configOrBranches] = args
+
+    if (!isCreateFlowOptions(configOrBranches)) {
+      return flow.branch(configOrBranches as Record<PropertyKey, CompatibleBranchFlow<any, undefined>>)
+    }
+
+    const config = configOrBranches as CreateFlowOptions<any, any>
     const map = config.map as AnyStepMap | undefined
-    return new FlowBuilder([], asyncMode, config.resolver, map, config.name, config.description, false)
+    return new Flow([], asyncMode, config.resolver, map, config.name, config.description, false)
   }
 
   if (args.length === 2) {
-    const [id, fn] = args as [string, (...args: any[]) => any]
-    return (builder as any).step(id, fn)
+    const [first, second] = args
+
+    if (typeof second === 'function') {
+      return flow.step(first as string, second as FactoryStepFn)
+    }
+
+    return flow.branch(
+      first as Record<PropertyKey, CompatibleBranchFlow<any, undefined>>,
+      second as BranchOptions | undefined
+    )
   }
 
   if (args.length === 3) {
     const [first, second, third] = args
     if (typeof first === 'function') {
-      return (builder as any).branch(first, second, third)
+      return flow.branch(
+        first as (...args: any[]) => any,
+        second as Record<PropertyKey, CompatibleBranchFlow<any, undefined>>,
+        third as BranchOptions | undefined
+      )
     }
 
-    return (builder as any).step(first, second, third)
+    return flow.step(first as string, second as FactoryStepFn, third as StepOptions | undefined)
   }
 
   throw new Error(`create${asyncMode === 'sync' ? 'Sync' : 'Async'}Flow() expects 0, 1, 2, or 3 arguments`)

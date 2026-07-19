@@ -4,16 +4,25 @@ Model business rules and validation pipelines with typed steps, branches, and ex
 
 Structured flow gives you:
 
-- Step-by-step execution with readable ids and descriptions
-- Typed `data` and optional `ctx` across the whole flow
-- Branching into child flows without leaking child payloads back to the parent flow
-- Recorded execution results that can be rendered as HTML tables or Mermaid graphs
-- Metadata helpers for reusable step ids and descriptions
-- Flow-level metadata resolution for final step ids and descriptions
-- Runtime payload remapping through `map`
+- Simple API for modeling complex structures
+- Automatically generated documentation and graphs of the validation flow. You get documentation before execution:
+  graphs and HTML-tables. And after execution you can render graphs based on logged events
+- A way to define a flow of steps with a human-readable API and descriptions
+- API that enforces correctness and scales to hundreds of rules
+- Ready made tools to visualize and document the flow before and after execution
+  - Mermaid graphs: the flow and flow results
+  - Markdown HTML tables
+- Evidence of processesed rules
+- Full type enforcement: types are enforced for rule functions and flows
+- Promotes splitting the program code in to smaller functions. Instead of a deep nested validation logic, there's small
+  functions that are called by the flow
+
+Contents:
 
 - [Core API](#core-api-flow-html)
-  - [Ok](#core-api-ok-full-table)
+  - [No Kids](#core-api-no-kids-full-table)
+  - [Two Kids](#core-api-two-kids-full-table)
+  - [Missing Name](#core-api-missing-name-full-table)
 - [Flow metadata](#flow-metadata-flow-html)
   - [Ok](#flow-metadata-ok-full-table)
 - [Context-aware flow](#context-flow-flow-html)
@@ -22,6 +31,9 @@ Structured flow gives you:
   - [Manual](#map-flow-manual-full-table)
 - [Rule helper flow](#rule-flow-flow-html)
   - [Manual](#rule-flow-manual-full-table)
+- [PC10](#pc10-flow)
+- [PC20](#pc20-flow)
+- [PC22](#pc22-flow)
 - [AUTO-1](#auto-1-flow)
 - [MANUAL-1](#manual-1-flow)
 
@@ -42,27 +54,32 @@ createSyncFlow<Data>({
   map,
 })
 
-createSyncFlow(stepId, stepFn, stepOptions?)
-createAsyncFlow(stepId, stepFn, stepOptions?)
+createSyncFlow(stepId, stepFn, stepOptions ?)
+createAsyncFlow(stepId, stepFn, stepOptions ?)
 
-createSyncFlow(select, branches, branchOptions?)
-createAsyncFlow(select, branches, branchOptions?)
+createSyncFlow(select, branches, branchOptions ?)
+createAsyncFlow(select, branches, branchOptions ?)
+
+createSyncFlow(branches, branchOptions ?)
+createAsyncFlow(branches, branchOptions ?)
 ```
 
 Use the empty generic form when your first `step()` should define the flow. Use the config form when you want flow-level
 metadata, a flow-level `resolver`, or a flow-level `map`. Use the positional forms for short one-step or one-branch
-flows.
+flows. When a branch is created without a selector, every branch flow runs.
 
 ## Flow options
 
 Flow config currently supports:
 
-- `name?: string`: stored on the built flow as metadata
-- `description?: string`: stored on the built flow as metadata
-- `resolver?: (stepId) => string | RuleId | { id: string; description?: string }`: maps each `string`, `RuleId`, or `Step` id to its final recorded metadata
-- `map?: ({ id, data, ctx, stepOptions, params }) => object`: augments callback params, and can optionally return `fnInput: [data, params]` to override the callback signature
+- `name?: string`: stored on the flow as metadata
+- `description?: string`: stored on the flow as metadata
+- `resolver?: (stepId) => string | RuleId | { id: string; description?: string }`: maps each `string`, `RuleId`, or
+  `Rule` id to its final recorded metadata
+- `map?: ({ id, data, ctx, stepOptions, params }) => object`: augments callback params, and can optionally return
+  `fnInput: [data, params]` to override the callback signature
 
-`resolver` is metadata-only and is configured on the flow builder. `step()` and `branch()` do not have resolver options.
+`resolver` is metadata-only and is configured on the flow. `step()` and `branch()` do not have resolver options.
 `map` is runtime-only. By default it augments the second callback parameter while `data` remains the flow's accumulated
 data object. When a map returns `fnInput: [data, params]`, that tuple becomes the callback signature for that node.
 
@@ -72,18 +89,25 @@ data object. When a map returns `fnInput: [data, params]`, that tuple becomes th
 
 ```ts
 {
-  description?: string
-  status?: {
-    error?: 'ignore' | 'exception'
-    exception?: 'error'
+  description ? : string
+  status ? : {
+    error? : 'ignore' | 'exception'
+    exception? : 'error'
   }
-  map?: ({ id, data, ctx, stepOptions, params }) => object & {
-    fnInput?: [data: object, params: object]
-  }
+  map ? : ({id, data, ctx, stepOptions, params}) => object & {
+    fnInput? : [data
+:
+  object, params
+:
+  object
+]
+}
 }
 ```
 
 The flow-level `map` runs before a step-level or branch-level `map`.
+For `branch()`, `name` is display-only. Set `ruleId` only when the branch wrapper itself should have a public id and be
+included by `flattenFailedStepResults()` when it fails.
 
 ## Runtime behavior
 
@@ -93,7 +117,8 @@ The flow-level `map` runs before a step-level or branch-level `map`.
 - With `map`, its returned fields are merged into `params` and `params.ctx` stays available
 - With `map().fnInput`, the callback is invoked with that explicit `[data, params]` tuple instead
 - `withContext<Ctx>()` enables `flow.run(data, ctx)` and types downstream callbacks accordingly
-- Plain object returns record `ok` payloads; use `ok()`, `error()`, `stop()`, `skip()`, or `exception()` for explicit statuses
+- Plain object returns record `ok` payloads; use `ok()`, `error()`, `stop()`, `skip()`, or `exception()` for explicit
+  statuses
 
 Status handling:
 
@@ -109,34 +134,115 @@ Status handling:
 
 - `result.status` is the overall flow status
 - `result.stepResults` contains recorded `StepResult` entries in execution order
-- branch steps include `selectedBranchKeys` and nested `branches`
-- helper utilities such as `collectFailedStepIds()` and `convertResultNode()` can flatten or normalize result inspection
+- branch steps include `selectedBranchKeys` only when a selector picks a subset; branches that run every child flow only include nested `branches`
+- helper utilities such as `flattenFailedStepResults()` and `convertResultNode()` can flatten or normalize result
+  inspection
 
 # Examples
 
 ## Core API Example
 
-This example uses the short positional form. The first step infers the flow input type and later steps build on the
-returned data.
+This example defines reusable `rule()` helpers, builds a `personChecks` flow from them, and composes that flow into a
+larger household flow with branches.
 
 <a id="core-api-code-block"></a>
 ```ts
-const loadOccupancies = createAsyncFlow(
-  'IC10',
-  async ({ form }: { form: SubmittedForm }, _params) => ({
-    occupancyCount: form.occupantCount,
-  }),
-  { description: 'Get linked occupancy records' }
+type Person = {
+  id: string
+  name: string
+  age: number
+}
+
+type CoreApiData = {
+  person: Person
+  children: Person[]
+}
+
+const PC10verifyPerson = rule(
+  'PC10',
+  ({ person }: CoreApiData) =>
+    person.name.trim().length > 0
+      ? { personId: person.id, personName: person.name }
+      : error({
+          message: 'Person is invalid.',
+          variables: { info: 'Person failed identity checks.' },
+        }).addResult(
+          ruleId('PC10.name', { description: 'Check person name' }),
+          error({
+            path: 'name',
+            message: 'Person name is required.',
+            variables: { info: 'Person name is required.' },
+          })
+        ),
+  { description: 'Verify person identity' }
 )
+
+const PC20checkChildrenCount = rule(
+  'PC20',
+  ({ children }: CoreApiData) => ({
+    childCount: children.length,
+    hasChildren: children.length > 0,
+  }),
+  { description: 'Check children count' }
+)
+
+const personChecks = createSyncFlow<CoreApiData>()
+  .step(PC10verifyPerson)
   .step(
-    'IC20',
-    ({ form }, _params) =>
-      form.occupantCount >= 2
-        ? { info: 'Occupancy count looks good.' }
-        : error({ variables: { info: 'Expected at least two occupancies.' } }),
-    { description: 'Verify occupancy count' }
+    'PC11',
+    ({ person }) =>
+      person.age >= 18
+        ? { adult: true }
+        : error({
+            path: 'person.age',
+            message: `${person.name} must be an adult.`,
+            variables: { info: `${person.name} must be an adult.` },
+          }),
+    { description: 'Check person age' }
   )
-  .build()
+
+const childrenFlow = createSyncFlow<CoreApiData>()
+  .step(PC20checkChildrenCount)
+  .step(
+    'PC21',
+    ({ children }) => ({
+      childNames: children.map((child) => child.name),
+    }),
+    { description: 'List children' }
+  )
+
+const noChildrenFlow = createSyncFlow<CoreApiData>().step(
+  'PC22',
+  ({ children }) =>
+    children.length === 0
+      ? { noChildren: true }
+      : error({
+          path: 'children',
+          message: 'Expected no children.',
+          variables: { info: 'Expected no children.' },
+        }),
+  { description: 'Confirm no children' }
+)
+
+const householdFlow = createSyncFlow<CoreApiData>()
+  .branch(
+    {
+      mainPerson: personChecks,
+    },
+    { name: 'main person checks', description: 'Run all main person checks', path: 'mainPerson' }
+  )
+  .branch(
+    ({ children }, _params) => (children.length > 0 ? 'children' : 'noChildren'),
+    {
+      children: childrenFlow,
+      noChildren: noChildrenFlow,
+    },
+    {
+      ruleId: ruleId('BR20', { description: 'Route based on whether the person has children' }),
+      name: 'children or no children',
+      description: 'Route based on whether the person has children',
+    }
+  )
 ```
 
 ### Flow Layout
@@ -144,27 +250,82 @@ const loadOccupancies = createAsyncFlow(
 <a id="core-api-flow-html"></a>
 <!-- structured-process-demo:core-api-flow-html:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>IC10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">IC10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Get linked occupancy records</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>main person checks</strong></div><div style="margin-top:4px;color:#334155;font-size:13px;">Run all main person checks</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="display:grid;grid-template-columns:repeat(1,minmax(0,1fr));gap:12px;padding-left:12px;"><div style="border:1px solid #d0d7de;border-radius:6px;padding:10px;background:#f8fafc;">
+<div><strong>mainPerson</strong></div>
+<div style="margin-top:8px;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Verify person identity</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
 </tr><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>IC20</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">IC20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Verify occupancy count</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC11</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC11</div><div style="margin-top:4px;color:#334155;font-size:13px;">Check person age</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table></div>
+</div></div></td>
+</tr><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>children or no children</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">ruleId: BR20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Route based on whether the person has children</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;"><div style="border:1px solid #d0d7de;border-radius:6px;padding:10px;background:#f8fafc;">
+<div><strong>children</strong></div>
+<div style="margin-top:8px;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC20</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Check children count</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC21</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC21</div><div style="margin-top:4px;color:#334155;font-size:13px;">List children</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table></div>
+</div><div style="border:1px solid #d0d7de;border-radius:6px;padding:10px;background:#f8fafc;">
+<div><strong>noChildren</strong></div>
+<div style="margin-top:8px;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC22</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC22</div><div style="margin-top:4px;color:#334155;font-size:13px;">Confirm no children</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table></div>
+</div></div></td>
 </tr></tbody></table>
 <!-- structured-process-demo:core-api-flow-html:html-table:end -->
 
 ### Static Graph
 
 <a id="core-api-static-graph"></a>
-<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>No run result yet.</p></div><div><div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <!-- structured-process-demo:core-api-static-graph:mermaid:start -->
 ```mermaid
 flowchart TD
   start([Start])
-  step_0["IC10: Get linked occupancy records"]
-  step_0 --> step_1
-  step_1["IC20: Verify occupancy count"]
-  step_1 --> done
+  step_0["main person checks: Run all main person checks
+branches: mainPerson"]
+  branch_0_end["main person checks:
+end"]
+  branch_0_end --> step_1
+  class branch_0_end join
+  branch_0_0_start["Branch: mainPerson"]
+  step_0 --> branch_0_0_start
+  branch_0_0_step_0["PC10: Verify person identity"]
+  branch_0_0_start --> branch_0_0_step_0
+  branch_0_0_step_0 --> branch_0_0_step_1
+  branch_0_0_step_1["PC11: Check person age"]
+  branch_0_0_step_1 --> branch_0_end
+  class branch_0_0_start executed
+  step_1["children or no children: Route based on whether the person has children
+ruleId: BR20
+branches: children, noChildren"]
+  branch_1_end["children or no children:
+end"]
+  branch_1_end --> done
+  class branch_1_end join
+  branch_1_0_start["Branch: children"]
+  step_1 --> branch_1_0_start
+  branch_1_0_step_0["PC20: Check children count"]
+  branch_1_0_start --> branch_1_0_step_0
+  branch_1_0_step_0 --> branch_1_0_step_1
+  branch_1_0_step_1["PC21: List children"]
+  branch_1_0_step_1 --> branch_1_end
+  class branch_1_0_start executed
+  branch_1_1_start["Branch: noChildren"]
+  step_1 --> branch_1_1_start
+  branch_1_1_step_0["PC22: Confirm no children"]
+  branch_1_1_start --> branch_1_1_step_0
+  branch_1_1_step_0 --> branch_1_end
+  class branch_1_1_start executed
   done([Done])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
@@ -177,73 +338,198 @@ flowchart TD
 <!-- structured-process-demo:core-api-static-graph:mermaid:end -->
 
 </div></div><div><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>IC10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">IC10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Get linked occupancy records</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>main person checks</strong></div><div style="margin-top:4px;color:#334155;font-size:13px;">Run all main person checks</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="display:grid;grid-template-columns:repeat(1,minmax(0,1fr));gap:12px;padding-left:12px;"><div style="border:1px solid #d0d7de;border-radius:6px;padding:10px;background:#f8fafc;">
+<div><strong>mainPerson</strong></div>
+<div style="margin-top:8px;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Verify person identity</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
 </tr><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>IC20</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">IC20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Verify occupancy count</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC11</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC11</div><div style="margin-top:4px;color:#334155;font-size:13px;">Check person age</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table></div>
+</div></div></td>
+</tr><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>children or no children</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">ruleId: BR20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Route based on whether the person has children</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;"><div style="border:1px solid #d0d7de;border-radius:6px;padding:10px;background:#f8fafc;">
+<div><strong>children</strong></div>
+<div style="margin-top:8px;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC20</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Check children count</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC21</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC21</div><div style="margin-top:4px;color:#334155;font-size:13px;">List children</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table></div>
+</div><div style="border:1px solid #d0d7de;border-radius:6px;padding:10px;background:#f8fafc;">
+<div><strong>noChildren</strong></div>
+<div style="margin-top:8px;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC22</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC22</div><div style="margin-top:4px;color:#334155;font-size:13px;">Confirm no children</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table></div>
+</div></div></td>
 </tr></tbody></table></div></div>
 
-### Example Run
+### No Kids Run
 
-<a id="core-api-ok-full-table"></a>
+<a id="core-api-no-kids-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial flow.run() input</strong></p>
-<!-- structured-process-demo:core-api-ok-init:json:start -->
+<!-- structured-process-demo:core-api-no-kids-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
-  &quot;form&quot;: {
-    &quot;id&quot;: &quot;200&quot;,
-    &quot;occupantCount&quot;: 2,
-    &quot;requiresManualReview&quot;: false
-  }
+  &quot;person&quot;: {
+    &quot;id&quot;: &quot;p1&quot;,
+    &quot;name&quot;: &quot;Ada&quot;,
+    &quot;age&quot;: 37
+  },
+  &quot;children&quot;: []
 }</code>
 </pre>
-<!-- structured-process-demo:core-api-ok-init:json:end -->
+<!-- structured-process-demo:core-api-no-kids-init:json:end -->
 
 <p><strong>Resulting JSON</strong></p>
-<!-- structured-process-demo:core-api-ok-result:json:start -->
+<!-- structured-process-demo:core-api-no-kids-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;status&quot;: &quot;ok&quot;,
   &quot;stepResults&quot;: [
     {
-      &quot;id&quot;: &quot;IC10&quot;,
-      &quot;description&quot;: &quot;Get linked occupancy records&quot;,
+      &quot;name&quot;: &quot;main person checks&quot;,
+      &quot;description&quot;: &quot;Run all main person checks&quot;,
       &quot;status&quot;: &quot;ok&quot;,
-      &quot;result&quot;: {
-        &quot;occupancyCount&quot;: 2
-      }
+      &quot;path&quot;: &quot;mainPerson&quot;,
+      &quot;branches&quot;: [
+        {
+          &quot;key&quot;: &quot;mainPerson&quot;,
+          &quot;status&quot;: &quot;ok&quot;,
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;PC10&quot;,
+              &quot;description&quot;: &quot;Verify person identity&quot;,
+              &quot;status&quot;: &quot;ok&quot;,
+              &quot;variables&quot;: {
+                &quot;personId&quot;: &quot;p1&quot;,
+                &quot;personName&quot;: &quot;Ada&quot;
+              }
+            },
+            {
+              &quot;id&quot;: &quot;PC11&quot;,
+              &quot;description&quot;: &quot;Check person age&quot;,
+              &quot;status&quot;: &quot;ok&quot;,
+              &quot;variables&quot;: {
+                &quot;adult&quot;: true
+              }
+            }
+          ]
+        }
+      ]
     },
     {
-      &quot;id&quot;: &quot;IC20&quot;,
-      &quot;description&quot;: &quot;Verify occupancy count&quot;,
+      &quot;id&quot;: &quot;BR20&quot;,
+      &quot;ruleId&quot;: &quot;BR20&quot;,
+      &quot;name&quot;: &quot;children or no children&quot;,
+      &quot;description&quot;: &quot;Route based on whether the person has children&quot;,
       &quot;status&quot;: &quot;ok&quot;,
-      &quot;result&quot;: {
-        &quot;info&quot;: &quot;Occupancy count looks good.&quot;
-      }
+      &quot;selectedBranchKeys&quot;: [
+        &quot;noChildren&quot;
+      ],
+      &quot;branches&quot;: [
+        {
+          &quot;key&quot;: &quot;noChildren&quot;,
+          &quot;status&quot;: &quot;ok&quot;,
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;PC22&quot;,
+              &quot;description&quot;: &quot;Confirm no children&quot;,
+              &quot;status&quot;: &quot;ok&quot;,
+              &quot;variables&quot;: {
+                &quot;noChildren&quot;: true
+              }
+            }
+          ]
+        },
+        {
+          &quot;key&quot;: &quot;children&quot;,
+          &quot;status&quot;: &quot;skip&quot;,
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;PC20&quot;,
+              &quot;description&quot;: &quot;Check children count&quot;,
+              &quot;status&quot;: &quot;skip&quot;
+            },
+            {
+              &quot;id&quot;: &quot;PC21&quot;,
+              &quot;description&quot;: &quot;List children&quot;,
+              &quot;status&quot;: &quot;skip&quot;
+            }
+          ]
+        }
+      ]
     }
   ],
-  &quot;failedStepIds&quot;: []
+  &quot;flattenFailedStepResults&quot;: []
 }</code>
 </pre>
-<!-- structured-process-demo:core-api-ok-result:json:end -->
+<!-- structured-process-demo:core-api-no-kids-result:json:end -->
 
 </div></div><div><div>
 
-<!-- structured-process-demo:core-api-ok:mermaid:start -->
+<!-- structured-process-demo:core-api-no-kids:mermaid:start -->
 ```mermaid
 flowchart TD
   start([Start])
-  step_0["IC10: Get linked occupancy records
+  step_0["main person checks: Run all main person checks
+branches: mainPerson
+[ok]"]
+  branch_0_end["main person checks:
+end"]
+  branch_0_end --> step_1
+  class branch_0_end join
+  branch_0_0_start["Branch: mainPerson"]
+  step_0 --> branch_0_0_start
+  branch_0_0_step_0["PC10: Verify person identity
 [ok]
-occupancyCount=2"]
-  step_0 --> step_1
-  step_1["IC20: Verify occupancy count
+personId=p1, personName=Ada"]
+  branch_0_0_start --> branch_0_0_step_0
+  branch_0_0_step_0 --> branch_0_0_step_1
+  class branch_0_0_step_0 success
+  branch_0_0_step_1["PC11: Check person age
 [ok]
-Occupancy count looks good."]
-  step_1 --> done
+adult=true"]
+  branch_0_0_step_1 --> branch_0_end
+  class branch_0_0_step_1 success
+  class branch_0_0_start executed
+  step_1["children or no children: Route based on whether the person has children
+ruleId: BR20
+branches: noChildren
+[ok]"]
+  branch_1_end["children or no children:
+end"]
+  branch_1_end --> done
+  class branch_1_end join
+  branch_1_0_start["Branch: noChildren"]
+  step_1 --> branch_1_0_start
+  branch_1_0_step_0["PC22: Confirm no children
+[ok]
+noChildren=true"]
+  branch_1_0_start --> branch_1_0_step_0
+  branch_1_0_step_0 --> branch_1_end
+  class branch_1_0_step_0 success
+  class branch_1_0_start executed
+  branch_1_1_start["Branch: children
+[skip]"]
+  step_1 --> branch_1_1_start
+  branch_1_1_step_0["PC20: Check children count
+[skip]"]
+  branch_1_1_start --> branch_1_1_step_0
+  branch_1_1_step_0 --> branch_1_1_step_1
+  class branch_1_1_step_0 neutral
+  branch_1_1_step_1["PC21: List children
+[skip]"]
+  branch_1_1_step_1 --> branch_1_end
+  class branch_1_1_step_1 neutral
+  class branch_1_1_start neutral
   done([Done])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
@@ -257,31 +543,593 @@ Occupancy count looks good."]
   class start executed
   class done success
 ```
-<!-- structured-process-demo:core-api-ok:mermaid:end -->
+<!-- structured-process-demo:core-api-no-kids:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span><br><strong>Failed steps:</strong> none</p>
-<!-- structured-process-demo:core-api-ok:html-table:start -->
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span></p>
+<p><strong>flattenFailedStepResults()</strong></p>
+<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
+<tbody><tr><td colspan="6" style="padding:8px;border-bottom:1px solid #d0d7de;color:#64748b;">No failed step results.</td></tr></tbody>
+</table>
+<!-- structured-process-demo:core-api-no-kids:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC10</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Get linked occupancy records</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">main person checks</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Run all main person checks</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;occupancyCount&quot;:2}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>mainPerson</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>PC10: Verify person identity <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;personId&quot;:&quot;p1&quot;,&quot;personName&quot;:&quot;Ada&quot;}</div>
+
+</div><div style="margin-top:4px;padding-left:12px;">
+<div>PC11: Check person age <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;adult&quot;:true}</div>
+
+</div>
+</div></td>
 </tr><tr>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">IC20</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Verify occupancy count</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">children or no children<div style="margin-top:2px;color:#475569;font-size:12px;">ruleId: BR20</div></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Route based on whether the person has children</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Occupancy count looks good.&quot;}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>noChildren</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>PC22: Confirm no children <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;noChildren&quot;:true}</div>
+
+</div>
+</div><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>children</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>PC20: Check children count <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+
+</div><div style="margin-top:4px;padding-left:12px;">
+<div>PC21: List children <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+
+</div>
+</div></td>
 </tr></tbody>
 </table>
-<!-- structured-process-demo:core-api-ok:html-table:end --></div></div>
+<!-- structured-process-demo:core-api-no-kids:html-table:end --></div></div>
+
+### Two Kids Run
+
+<a id="core-api-two-kids-full-table"></a>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
+
+<p><strong>Initial flow.run() input</strong></p>
+<!-- structured-process-demo:core-api-two-kids-init:json:start -->
+<pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
+<code>{
+  &quot;person&quot;: {
+    &quot;id&quot;: &quot;p2&quot;,
+    &quot;name&quot;: &quot;Grace&quot;,
+    &quot;age&quot;: 42
+  },
+  &quot;children&quot;: [
+    {
+      &quot;id&quot;: &quot;c1&quot;,
+      &quot;name&quot;: &quot;Lin&quot;,
+      &quot;age&quot;: 8
+    },
+    {
+      &quot;id&quot;: &quot;c2&quot;,
+      &quot;name&quot;: &quot;Mika&quot;,
+      &quot;age&quot;: 6
+    }
+  ]
+}</code>
+</pre>
+<!-- structured-process-demo:core-api-two-kids-init:json:end -->
+
+<p><strong>Resulting JSON</strong></p>
+<!-- structured-process-demo:core-api-two-kids-result:json:start -->
+<pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
+<code>{
+  &quot;status&quot;: &quot;ok&quot;,
+  &quot;stepResults&quot;: [
+    {
+      &quot;name&quot;: &quot;main person checks&quot;,
+      &quot;description&quot;: &quot;Run all main person checks&quot;,
+      &quot;status&quot;: &quot;ok&quot;,
+      &quot;path&quot;: &quot;mainPerson&quot;,
+      &quot;branches&quot;: [
+        {
+          &quot;key&quot;: &quot;mainPerson&quot;,
+          &quot;status&quot;: &quot;ok&quot;,
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;PC10&quot;,
+              &quot;description&quot;: &quot;Verify person identity&quot;,
+              &quot;status&quot;: &quot;ok&quot;,
+              &quot;variables&quot;: {
+                &quot;personId&quot;: &quot;p2&quot;,
+                &quot;personName&quot;: &quot;Grace&quot;
+              }
+            },
+            {
+              &quot;id&quot;: &quot;PC11&quot;,
+              &quot;description&quot;: &quot;Check person age&quot;,
+              &quot;status&quot;: &quot;ok&quot;,
+              &quot;variables&quot;: {
+                &quot;adult&quot;: true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      &quot;id&quot;: &quot;BR20&quot;,
+      &quot;ruleId&quot;: &quot;BR20&quot;,
+      &quot;name&quot;: &quot;children or no children&quot;,
+      &quot;description&quot;: &quot;Route based on whether the person has children&quot;,
+      &quot;status&quot;: &quot;ok&quot;,
+      &quot;selectedBranchKeys&quot;: [
+        &quot;children&quot;
+      ],
+      &quot;branches&quot;: [
+        {
+          &quot;key&quot;: &quot;children&quot;,
+          &quot;status&quot;: &quot;ok&quot;,
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;PC20&quot;,
+              &quot;description&quot;: &quot;Check children count&quot;,
+              &quot;status&quot;: &quot;ok&quot;,
+              &quot;variables&quot;: {
+                &quot;childCount&quot;: 2,
+                &quot;hasChildren&quot;: true
+              }
+            },
+            {
+              &quot;id&quot;: &quot;PC21&quot;,
+              &quot;description&quot;: &quot;List children&quot;,
+              &quot;status&quot;: &quot;ok&quot;,
+              &quot;variables&quot;: {
+                &quot;childNames&quot;: [
+                  &quot;Lin&quot;,
+                  &quot;Mika&quot;
+                ]
+              }
+            }
+          ]
+        },
+        {
+          &quot;key&quot;: &quot;noChildren&quot;,
+          &quot;status&quot;: &quot;skip&quot;,
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;PC22&quot;,
+              &quot;description&quot;: &quot;Confirm no children&quot;,
+              &quot;status&quot;: &quot;skip&quot;
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  &quot;flattenFailedStepResults&quot;: []
+}</code>
+</pre>
+<!-- structured-process-demo:core-api-two-kids-result:json:end -->
+
+</div></div><div><div>
+
+<!-- structured-process-demo:core-api-two-kids:mermaid:start -->
+```mermaid
+flowchart TD
+  start([Start])
+  step_0["main person checks: Run all main person checks
+branches: mainPerson
+[ok]"]
+  branch_0_end["main person checks:
+end"]
+  branch_0_end --> step_1
+  class branch_0_end join
+  branch_0_0_start["Branch: mainPerson"]
+  step_0 --> branch_0_0_start
+  branch_0_0_step_0["PC10: Verify person identity
+[ok]
+personId=p2, personName=Grace"]
+  branch_0_0_start --> branch_0_0_step_0
+  branch_0_0_step_0 --> branch_0_0_step_1
+  class branch_0_0_step_0 success
+  branch_0_0_step_1["PC11: Check person age
+[ok]
+adult=true"]
+  branch_0_0_step_1 --> branch_0_end
+  class branch_0_0_step_1 success
+  class branch_0_0_start executed
+  step_1["children or no children: Route based on whether the person has children
+ruleId: BR20
+branches: children
+[ok]"]
+  branch_1_end["children or no children:
+end"]
+  branch_1_end --> done
+  class branch_1_end join
+  branch_1_0_start["Branch: children"]
+  step_1 --> branch_1_0_start
+  branch_1_0_step_0["PC20: Check children count
+[ok]
+childCount=2, hasChildren=true"]
+  branch_1_0_start --> branch_1_0_step_0
+  branch_1_0_step_0 --> branch_1_0_step_1
+  class branch_1_0_step_0 success
+  branch_1_0_step_1["PC21: List children
+[ok]
+childNames=Lin, Mika"]
+  branch_1_0_step_1 --> branch_1_end
+  class branch_1_0_step_1 success
+  class branch_1_0_start executed
+  branch_1_1_start["Branch: noChildren
+[skip]"]
+  step_1 --> branch_1_1_start
+  branch_1_1_step_0["PC22: Confirm no children
+[skip]"]
+  branch_1_1_start --> branch_1_1_step_0
+  branch_1_1_step_0 --> branch_1_end
+  class branch_1_1_step_0 neutral
+  class branch_1_1_start neutral
+  done([Done])
+  start --> step_0
+  classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
+  classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px
+  classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
+  classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
+  classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
+  class step_0 success
+  class step_1 success
+  class start executed
+  class done success
+```
+<!-- structured-process-demo:core-api-two-kids:mermaid:end -->
+
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span></p>
+<p><strong>flattenFailedStepResults()</strong></p>
+<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
+<tbody><tr><td colspan="6" style="padding:8px;border-bottom:1px solid #d0d7de;color:#64748b;">No failed step results.</td></tr></tbody>
+</table>
+<!-- structured-process-demo:core-api-two-kids:html-table:start -->
+<table style="width:100%;border-collapse:collapse;font-size:14px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<tbody><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">main person checks</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Run all main person checks</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>mainPerson</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>PC10: Verify person identity <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;personId&quot;:&quot;p2&quot;,&quot;personName&quot;:&quot;Grace&quot;}</div>
+
+</div><div style="margin-top:4px;padding-left:12px;">
+<div>PC11: Check person age <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;adult&quot;:true}</div>
+
+</div>
+</div></td>
+</tr><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">children or no children<div style="margin-top:2px;color:#475569;font-size:12px;">ruleId: BR20</div></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Route based on whether the person has children</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>children</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>PC20: Check children count <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;childCount&quot;:2,&quot;hasChildren&quot;:true}</div>
+
+</div><div style="margin-top:4px;padding-left:12px;">
+<div>PC21: List children <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;childNames&quot;:[&quot;Lin&quot;,&quot;Mika&quot;]}</div>
+
+</div>
+</div><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>noChildren</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>PC22: Confirm no children <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+
+</div>
+</div></td>
+</tr></tbody>
+</table>
+<!-- structured-process-demo:core-api-two-kids:html-table:end --></div></div>
+
+### Missing Name Run
+
+<a id="core-api-missing-name-full-table"></a>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
+
+<p><strong>Initial flow.run() input</strong></p>
+<!-- structured-process-demo:core-api-missing-name-init:json:start -->
+<pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
+<code>{
+  &quot;person&quot;: {
+    &quot;id&quot;: &quot;p3&quot;,
+    &quot;name&quot;: &quot;&quot;,
+    &quot;age&quot;: 29
+  },
+  &quot;children&quot;: []
+}</code>
+</pre>
+<!-- structured-process-demo:core-api-missing-name-init:json:end -->
+
+<p><strong>Resulting JSON</strong></p>
+<!-- structured-process-demo:core-api-missing-name-result:json:start -->
+<pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
+<code>{
+  &quot;status&quot;: &quot;error&quot;,
+  &quot;stepResults&quot;: [
+    {
+      &quot;name&quot;: &quot;main person checks&quot;,
+      &quot;description&quot;: &quot;Run all main person checks&quot;,
+      &quot;status&quot;: &quot;error&quot;,
+      &quot;path&quot;: &quot;mainPerson&quot;,
+      &quot;branches&quot;: [
+        {
+          &quot;key&quot;: &quot;mainPerson&quot;,
+          &quot;status&quot;: &quot;error&quot;,
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;PC10&quot;,
+              &quot;description&quot;: &quot;Verify person identity&quot;,
+              &quot;status&quot;: &quot;error&quot;,
+              &quot;message&quot;: &quot;Person is invalid.&quot;,
+              &quot;variables&quot;: {
+                &quot;info&quot;: &quot;Person failed identity checks.&quot;
+              },
+              &quot;results&quot;: [
+                {
+                  &quot;status&quot;: &quot;error&quot;,
+                  &quot;ruleId&quot;: {
+                    &quot;id&quot;: &quot;PC10.name&quot;,
+                    &quot;description&quot;: &quot;Check person name&quot;
+                  },
+                  &quot;path&quot;: &quot;name&quot;,
+                  &quot;message&quot;: &quot;Person name is required.&quot;,
+                  &quot;variables&quot;: {
+                    &quot;info&quot;: &quot;Person name is required.&quot;
+                  }
+                }
+              ]
+            },
+            {
+              &quot;id&quot;: &quot;PC11&quot;,
+              &quot;description&quot;: &quot;Check person age&quot;,
+              &quot;status&quot;: &quot;ok&quot;,
+              &quot;variables&quot;: {
+                &quot;adult&quot;: true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      &quot;id&quot;: &quot;BR20&quot;,
+      &quot;ruleId&quot;: &quot;BR20&quot;,
+      &quot;name&quot;: &quot;children or no children&quot;,
+      &quot;description&quot;: &quot;Route based on whether the person has children&quot;,
+      &quot;status&quot;: &quot;ok&quot;,
+      &quot;selectedBranchKeys&quot;: [
+        &quot;noChildren&quot;
+      ],
+      &quot;branches&quot;: [
+        {
+          &quot;key&quot;: &quot;noChildren&quot;,
+          &quot;status&quot;: &quot;ok&quot;,
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;PC22&quot;,
+              &quot;description&quot;: &quot;Confirm no children&quot;,
+              &quot;status&quot;: &quot;ok&quot;,
+              &quot;variables&quot;: {
+                &quot;noChildren&quot;: true
+              }
+            }
+          ]
+        },
+        {
+          &quot;key&quot;: &quot;children&quot;,
+          &quot;status&quot;: &quot;skip&quot;,
+          &quot;stepResults&quot;: [
+            {
+              &quot;id&quot;: &quot;PC20&quot;,
+              &quot;description&quot;: &quot;Check children count&quot;,
+              &quot;status&quot;: &quot;skip&quot;
+            },
+            {
+              &quot;id&quot;: &quot;PC21&quot;,
+              &quot;description&quot;: &quot;List children&quot;,
+              &quot;status&quot;: &quot;skip&quot;
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  &quot;flattenFailedStepResults&quot;: [
+    {
+      &quot;id&quot;: &quot;PC10&quot;,
+      &quot;status&quot;: &quot;error&quot;,
+      &quot;description&quot;: &quot;Verify person identity&quot;,
+      &quot;path&quot;: &quot;mainPerson&quot;,
+      &quot;message&quot;: &quot;Person is invalid.&quot;,
+      &quot;variables&quot;: {
+        &quot;info&quot;: &quot;Person failed identity checks.&quot;
+      }
+    },
+    {
+      &quot;id&quot;: &quot;PC10.name&quot;,
+      &quot;status&quot;: &quot;error&quot;,
+      &quot;description&quot;: &quot;Check person name&quot;,
+      &quot;path&quot;: &quot;mainPerson.name&quot;,
+      &quot;message&quot;: &quot;Person name is required.&quot;,
+      &quot;variables&quot;: {
+        &quot;info&quot;: &quot;Person name is required.&quot;
+      }
+    }
+  ]
+}</code>
+</pre>
+<!-- structured-process-demo:core-api-missing-name-result:json:end -->
+
+</div></div><div><div>
+
+<!-- structured-process-demo:core-api-missing-name:mermaid:start -->
+```mermaid
+flowchart TD
+  start([Start])
+  step_0["main person checks: Run all main person checks
+branches: mainPerson
+[error]"]
+  branch_0_end["main person checks:
+end"]
+  branch_0_end --> step_1
+  class branch_0_end join
+  branch_0_0_start["Branch: mainPerson"]
+  step_0 --> branch_0_0_start
+  branch_0_0_step_0["PC10: Verify person identity
+[error]
+Person failed identity checks."]
+  branch_0_0_start --> branch_0_0_step_0
+  branch_0_0_step_0 --> branch_0_0_step_1
+  class branch_0_0_step_0 failure
+  branch_0_0_step_1["PC11: Check person age
+[ok]
+adult=true"]
+  branch_0_0_step_1 --> branch_0_end
+  class branch_0_0_step_1 success
+  class branch_0_0_start executed
+  step_1["children or no children: Route based on whether the person has children
+ruleId: BR20
+branches: noChildren
+[ok]"]
+  branch_1_end["children or no children:
+end"]
+  branch_1_end --> done
+  class branch_1_end join
+  branch_1_0_start["Branch: noChildren"]
+  step_1 --> branch_1_0_start
+  branch_1_0_step_0["PC22: Confirm no children
+[ok]
+noChildren=true"]
+  branch_1_0_start --> branch_1_0_step_0
+  branch_1_0_step_0 --> branch_1_end
+  class branch_1_0_step_0 success
+  class branch_1_0_start executed
+  branch_1_1_start["Branch: children
+[skip]"]
+  step_1 --> branch_1_1_start
+  branch_1_1_step_0["PC20: Check children count
+[skip]"]
+  branch_1_1_start --> branch_1_1_step_0
+  branch_1_1_step_0 --> branch_1_1_step_1
+  class branch_1_1_step_0 neutral
+  branch_1_1_step_1["PC21: List children
+[skip]"]
+  branch_1_1_step_1 --> branch_1_end
+  class branch_1_1_step_1 neutral
+  class branch_1_1_start neutral
+  done([Completed with Errors])
+  start --> step_0
+  classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
+  classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px
+  classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px
+  classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px
+  classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
+  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
+  class step_0 failure
+  class step_1 success
+  class start executed
+  class done failure
+```
+<!-- structured-process-demo:core-api-missing-name:mermaid:end -->
+
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span></p>
+<p><strong>flattenFailedStepResults()</strong></p>
+<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
+<tbody><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">mainPerson</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">PC10</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Verify person identity</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Person is invalid.</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Person failed identity checks.&quot;}</td>
+</tr><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">mainPerson.name</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">PC10.name</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Check person name</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Person name is required.</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Person name is required.&quot;}</td>
+</tr></tbody>
+</table>
+<!-- structured-process-demo:core-api-missing-name:html-table:start -->
+<table style="width:100%;border-collapse:collapse;font-size:14px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
+<tbody><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">main person checks</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Run all main person checks</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>mainPerson</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>PC10: Verify person identity <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;info&quot;:&quot;Person failed identity checks.&quot;}</div>
+
+</div><div style="margin-top:4px;padding-left:12px;">
+<div>PC11: Check person age <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;adult&quot;:true}</div>
+
+</div>
+</div></td>
+</tr><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">children or no children<div style="margin-top:2px;color:#475569;font-size:12px;">ruleId: BR20</div></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Route based on whether the person has children</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>noChildren</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>PC22: Confirm no children <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">ok</span></div>
+<div style="margin-top:2px;color:#475569;">{&quot;noChildren&quot;:true}</div>
+
+</div>
+</div><div style="margin-bottom:10px;padding-left:0px;">
+<div><strong>children</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+<div style="margin-top:4px;padding-left:12px;">
+<div>PC20: Check children count <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+
+</div><div style="margin-top:4px;padding-left:12px;">
+<div>PC21: List children <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;">skip</span></div>
+
+
+</div>
+</div></td>
+</tr></tbody>
+</table>
+<!-- structured-process-demo:core-api-missing-name:html-table:end --></div></div>
 
 ## Flow Metadata Example
 
-This flow is created with flow-level `name` and `description`. Those values are stored on the built flow and can be used
+This flow is created with flow-level `name` and `description`. Those values are stored on the flow and can be used
 by surrounding tooling or documentation.
 
 <a id="flow-metadata-code-block"></a>
@@ -289,15 +1137,13 @@ by surrounding tooling or documentation.
 const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
   name: 'Named Review Flow',
   description: 'Demonstrates flow-level name and description metadata.',
-})
-  .step(
-    'META-10',
-    ({ form }, _params) => ({
-      reviewTarget: form.id,
-    }),
-    { description: 'Record the form id as the review target' }
-  )
-  .build()
+}).step(
+  'META-10',
+  ({ form }, _params) => ({
+    reviewTarget: form.id,
+  }),
+  { description: 'Record the form id as the review target' }
+)
 ```
 
 ### Flow Layout
@@ -313,7 +1159,7 @@ const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
 ### Static Graph
 
 <a id="flow-metadata-static-graph"></a>
-<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>No run result yet.</p></div><div><div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <!-- structured-process-demo:flow-metadata-static-graph:mermaid:start -->
 ```mermaid
@@ -365,12 +1211,12 @@ flowchart TD
       &quot;id&quot;: &quot;META-10&quot;,
       &quot;description&quot;: &quot;Record the form id as the review target&quot;,
       &quot;status&quot;: &quot;ok&quot;,
-      &quot;result&quot;: {
+      &quot;variables&quot;: {
         &quot;reviewTarget&quot;: &quot;meta-200&quot;
       }
     }
   ],
-  &quot;failedStepIds&quot;: []
+  &quot;flattenFailedStepResults&quot;: []
 }</code>
 </pre>
 <!-- structured-process-demo:flow-metadata-ok-result:json:end -->
@@ -399,7 +1245,12 @@ reviewTarget=meta-200"]
 ```
 <!-- structured-process-demo:flow-metadata-ok:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span><br><strong>Failed steps:</strong> none</p>
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span></p>
+<p><strong>flattenFailedStepResults()</strong></p>
+<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
+<tbody><tr><td colspan="6" style="padding:8px;border-bottom:1px solid #d0d7de;color:#64748b;">No failed step results.</td></tr></tbody>
+</table>
 <!-- structured-process-demo:flow-metadata-ok:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
@@ -433,7 +1284,6 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
     }),
     { description: 'Attach actor context to the review' }
   )
-  .build()
 ```
 
 ### Flow Layout
@@ -449,7 +1299,7 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
 ### Static Graph
 
 <a id="context-flow-static-graph"></a>
-<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>No run result yet.</p></div><div><div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <!-- structured-process-demo:context-flow-static-graph:mermaid:start -->
 ```mermaid
@@ -507,13 +1357,13 @@ flowchart TD
       &quot;id&quot;: &quot;CTX-10&quot;,
       &quot;description&quot;: &quot;Attach actor context to the review&quot;,
       &quot;status&quot;: &quot;ok&quot;,
-      &quot;result&quot;: {
+      &quot;variables&quot;: {
         &quot;actorLabel&quot;: &quot;reviewer:user-7&quot;,
         &quot;reviewTarget&quot;: &quot;ctx-200&quot;
       }
     }
   ],
-  &quot;failedStepIds&quot;: []
+  &quot;flattenFailedStepResults&quot;: []
 }</code>
 </pre>
 <!-- structured-process-demo:context-flow-reviewer-result:json:end -->
@@ -542,7 +1392,12 @@ actorLabel=reviewer:user-7, reviewTarget=ctx-200"]
 ```
 <!-- structured-process-demo:context-flow-reviewer:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span><br><strong>Failed steps:</strong> none</p>
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span></p>
+<p><strong>flattenFailedStepResults()</strong></p>
+<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
+<tbody><tr><td colspan="6" style="padding:8px;border-bottom:1px solid #d0d7de;color:#64748b;">No failed step results.</td></tr></tbody>
+</table>
 <!-- structured-process-demo:context-flow-reviewer:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
@@ -605,7 +1460,6 @@ const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
       description: 'Use the same fnInput override after step output has updated the flow data',
     }
   )
-  .build()
 ```
 
 ### Flow Layout
@@ -624,7 +1478,7 @@ const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
 ### Static Graph
 
 <a id="map-flow-static-graph"></a>
-<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>No run result yet.</p></div><div><div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <!-- structured-process-demo:map-flow-static-graph:mermaid:start -->
 ```mermaid
@@ -684,7 +1538,7 @@ flowchart TD
       &quot;id&quot;: &quot;MAP-10&quot;,
       &quot;description&quot;: &quot;Use fnInput to override the callback signature&quot;,
       &quot;status&quot;: &quot;ok&quot;,
-      &quot;result&quot;: {
+      &quot;variables&quot;: {
         &quot;summary&quot;: &quot;map-400:1&quot;,
         &quot;reviewTarget&quot;: &quot;map-400&quot;
       }
@@ -693,13 +1547,20 @@ flowchart TD
       &quot;id&quot;: &quot;MAP-20&quot;,
       &quot;description&quot;: &quot;Use the same fnInput override after step output has updated the flow data&quot;,
       &quot;status&quot;: &quot;error&quot;,
-      &quot;result&quot;: {
+      &quot;variables&quot;: {
         &quot;info&quot;: &quot;Escalate missing-summary&quot;
       }
     }
   ],
-  &quot;failedStepIds&quot;: [
-    &quot;MAP-20&quot;
+  &quot;flattenFailedStepResults&quot;: [
+    {
+      &quot;id&quot;: &quot;MAP-20&quot;,
+      &quot;status&quot;: &quot;error&quot;,
+      &quot;description&quot;: &quot;Use the same fnInput override after step output has updated the flow data&quot;,
+      &quot;variables&quot;: {
+        &quot;info&quot;: &quot;Escalate missing-summary&quot;
+      }
+    }
   ]
 }</code>
 </pre>
@@ -734,7 +1595,19 @@ Escalate missing-summary"]
 ```
 <!-- structured-process-demo:map-flow-manual:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> MAP-20</p>
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span></p>
+<p><strong>flattenFailedStepResults()</strong></p>
+<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
+<tbody><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">MAP-20</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Use the same fnInput override after step output has updated the flow data</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Escalate missing-summary&quot;}</td>
+</tr></tbody>
+</table>
 <!-- structured-process-demo:map-flow-manual:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
@@ -776,7 +1649,6 @@ const reviewFlow = createSyncFlow<ReviewData>()
     },
     { name: 'REVIEW-1', description: 'Route review' }
   )
-  .build()
 ```
 
 ### Flow Layout
@@ -787,7 +1659,7 @@ const reviewFlow = createSyncFlow<ReviewData>()
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>VALIDATE-1</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">VALIDATE-1</div><div style="margin-top:4px;color:#334155;font-size:13px;">Validate request</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
 </tr><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>REVIEW-1</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">REVIEW-1</div><div style="margin-top:4px;color:#334155;font-size:13px;">Route review</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>REVIEW-1</strong></div><div style="margin-top:4px;color:#334155;font-size:13px;">Route review</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;"><div style="border:1px solid #d0d7de;border-radius:6px;padding:10px;background:#f8fafc;">
 <div><strong>auto</strong></div>
 <div style="margin-top:8px;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
@@ -807,7 +1679,7 @@ const reviewFlow = createSyncFlow<ReviewData>()
 ### Static Graph
 
 <a id="rule-flow-static-graph"></a>
-<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>No run result yet.</p></div><div><div>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <!-- structured-process-demo:rule-flow-static-graph:mermaid:start -->
 ```mermaid
@@ -848,7 +1720,7 @@ end"]
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>VALIDATE-1</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">VALIDATE-1</div><div style="margin-top:4px;color:#334155;font-size:13px;">Validate request</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
 </tr><tr>
-<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>REVIEW-1</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">REVIEW-1</div><div style="margin-top:4px;color:#334155;font-size:13px;">Route review</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>REVIEW-1</strong></div><div style="margin-top:4px;color:#334155;font-size:13px;">Route review</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;"><div style="border:1px solid #d0d7de;border-radius:6px;padding:10px;background:#f8fafc;">
 <div><strong>auto</strong></div>
 <div style="margin-top:8px;"><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
@@ -896,12 +1768,12 @@ end"]
       &quot;id&quot;: &quot;VALIDATE-1&quot;,
       &quot;description&quot;: &quot;Validate request&quot;,
       &quot;status&quot;: &quot;ok&quot;,
-      &quot;result&quot;: {
+      &quot;variables&quot;: {
         &quot;valid&quot;: true
       }
     },
     {
-      &quot;id&quot;: &quot;REVIEW-1&quot;,
+      &quot;name&quot;: &quot;REVIEW-1&quot;,
       &quot;description&quot;: &quot;Route review&quot;,
       &quot;status&quot;: &quot;error&quot;,
       &quot;selectedBranchKeys&quot;: [
@@ -916,7 +1788,7 @@ end"]
               &quot;id&quot;: &quot;MANUAL-1&quot;,
               &quot;description&quot;: &quot;Send to manual review&quot;,
               &quot;status&quot;: &quot;error&quot;,
-              &quot;result&quot;: {
+              &quot;variables&quot;: {
                 &quot;info&quot;: &quot;Manual review required for 400.&quot;
               }
             }
@@ -936,9 +1808,15 @@ end"]
       ]
     }
   ],
-  &quot;failedStepIds&quot;: [
-    &quot;REVIEW-1&quot;,
-    &quot;MANUAL-1&quot;
+  &quot;flattenFailedStepResults&quot;: [
+    {
+      &quot;id&quot;: &quot;MANUAL-1&quot;,
+      &quot;status&quot;: &quot;error&quot;,
+      &quot;description&quot;: &quot;Send to manual review&quot;,
+      &quot;variables&quot;: {
+        &quot;info&quot;: &quot;Manual review required for 400.&quot;
+      }
+    }
   ]
 }</code>
 </pre>
@@ -994,7 +1872,19 @@ Manual review required for 400."]
 ```
 <!-- structured-process-demo:rule-flow-manual:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> REVIEW-1, MANUAL-1</p>
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span></p>
+<p><strong>flattenFailedStepResults()</strong></p>
+<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
+<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
+<tbody><tr>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">MANUAL-1</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Send to manual review</td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Manual review required for 400.&quot;}</td>
+</tr></tbody>
+</table>
 <!-- structured-process-demo:rule-flow-manual:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
@@ -1029,6 +1919,57 @@ Manual review required for 400."]
 <!-- structured-process-demo:rule-flow-manual:html-table:end --></div></div>
 
 ## Referenced leaf flows
+
+<a id="pc10-flow"></a>
+### PC10
+
+Verify person identity
+
+**Referenced from**
+
+- Core API
+<!-- structured-process-demo:pc10-flow-html:html-table:start -->
+<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC10</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC10</div><div style="margin-top:4px;color:#334155;font-size:13px;">Verify person identity</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC11</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC11</div><div style="margin-top:4px;color:#334155;font-size:13px;">Check person age</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table>
+<!-- structured-process-demo:pc10-flow-html:html-table:end -->
+
+<a id="pc20-flow"></a>
+### PC20
+
+Check children count
+
+**Referenced from**
+
+- Core API
+<!-- structured-process-demo:pc20-flow-html:html-table:start -->
+<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC20</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC20</div><div style="margin-top:4px;color:#334155;font-size:13px;">Check children count</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC21</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC21</div><div style="margin-top:4px;color:#334155;font-size:13px;">List children</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table>
+<!-- structured-process-demo:pc20-flow-html:html-table:end -->
+
+<a id="pc22-flow"></a>
+### PC22
+
+Confirm no children
+
+**Referenced from**
+
+- Core API
+<!-- structured-process-demo:pc22-flow-html:html-table:start -->
+<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>PC22</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">PC22</div><div style="margin-top:4px;color:#334155;font-size:13px;">Confirm no children</div></td>
+<td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
+</tr></tbody></table>
+<!-- structured-process-demo:pc22-flow-html:html-table:end -->
 
 <a id="auto-1-flow"></a>
 ### AUTO-1

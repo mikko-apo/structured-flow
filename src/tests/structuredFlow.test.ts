@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
-import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
+import { convertResultNode, flattenFailedStepResults } from '../resultUtils.ts'
 import {
   createAsyncFlow,
   createSyncFlow,
@@ -8,7 +8,7 @@ import {
   ok,
   ruleId,
   skip,
-  step as defineStep,
+  rule as defineRule,
   StepResult,
   stop,
 } from '../index'
@@ -36,13 +36,13 @@ function createAsyncBuilder() {
 }
 
 describe('structuredFlow core execution', () => {
-  it('uses the flow resolver to map string, RuleId, and Step metadata', () => {
-    const resolvedStep = defineStep(
-      'STEP-RES',
+  it('uses the flow resolver to map string, RuleId, and Rule metadata', () => {
+    const resolvedRule = defineRule(
+      'RULE-HELPER-RES',
       ({ person }: PersonData, _params: { ctx: undefined }) => ({
-        stepPersonId: person.id,
+        rulePersonId: person.id,
       }),
-      { description: 'Step helper description' }
+      { description: 'Rule helper description' }
     )
     const flow = createSyncFlow<PersonData>({
       resolver: (stepId) =>
@@ -56,8 +56,7 @@ describe('structuredFlow core execution', () => {
       .step(meta('RULE-RES', 'Rule description'), ({ person }, _params) => ({
         rulePersonId: person.id,
       }))
-      .step(resolvedStep)
-      .build()
+      .step(resolvedRule)
 
     const result = flow.run({
       person: { id: 'p-res', name: 'Ada', age: 31 },
@@ -70,7 +69,7 @@ describe('structuredFlow core execution', () => {
       stepResults: [
         { id: 'RES-STRING-RES', description: 'Resolved string id' },
         { id: 'RES-RULE-RES', description: 'Resolved Rule description' },
-        { id: 'RES-STEP-RES', description: 'Resolved Step helper description' },
+        { id: 'RES-RULE-HELPER-RES', description: 'Resolved Rule helper description' },
       ],
     })
   })
@@ -79,11 +78,9 @@ describe('structuredFlow core execution', () => {
     const flow = createSyncFlow<PersonData>({
       name: 'Person Review',
       description: 'Checks person review steps',
-    })
-      .step(meta('NAME-0', 'No-op'), ({ person }, _params) => ({
-        personId: person.id,
-      }))
-      .build()
+    }).step(meta('NAME-0', 'No-op'), ({ person }, _params) => ({
+      personId: person.id,
+    }))
 
     expect(flow.name).toBe('Person Review')
     expect(flow.description).toBe('Checks person review steps')
@@ -96,12 +93,10 @@ describe('structuredFlow core execution', () => {
 
     const builder = createSyncFlow<PersonData>().withContext<RequestCtx>()
 
-    const flow = builder
-      .step(meta('CTX-1', 'Uses request context'), (data, params) => ({
-        actorId: params.ctx.actorId,
-        personId: data.person.id,
-      }))
-      .build()
+    const flow = builder.step(meta('CTX-1', 'Uses request context'), (data, params) => ({
+      actorId: params.ctx.actorId,
+      personId: data.person.id,
+    }))
 
     const result = flow.run(
       {
@@ -115,7 +110,7 @@ describe('structuredFlow core execution', () => {
     expect(result.status).toBe('ok')
     expect(convertResultNode(result)).toMatchObject({
       status: 'ok',
-      stepResults: [{ id: 'CTX-1', result: { actorId: 'user-1', personId: 'p0' } }],
+      stepResults: [{ id: 'CTX-1', variables: { actorId: 'user-1', personId: 'p0' } }],
     })
 
     expectTypeOf<Parameters<typeof flow.run>>().toEqualTypeOf<[data: PersonData, ctx: RequestCtx]>()
@@ -128,11 +123,9 @@ describe('structuredFlow core execution', () => {
   })
 
   it('rejects ctx at runtime when the flow does not use withContext()', () => {
-    const flow = createSyncBuilder()
-      .step(meta('CTX-RUN-1', 'No ctx flow'), ({ person }, _params) => ({
-        personId: person.id,
-      }))
-      .build()
+    const flow = createSyncBuilder().step(meta('CTX-RUN-1', 'No ctx flow'), ({ person }, _params) => ({
+      personId: person.id,
+    }))
 
     expect(() =>
       (flow.run as (...args: any[]) => unknown)(
@@ -157,7 +150,6 @@ describe('structuredFlow core execution', () => {
         actorId: params.ctx.actorId,
         personId: person.id,
       }))
-      .build()
 
     expect(() =>
       (flow.run as (...args: any[]) => unknown)({
@@ -181,7 +173,6 @@ describe('structuredFlow core execution', () => {
         }),
         { description: 'Normalize person name' }
       )
-      .build()
 
     const result = flow.run({
       person: { id: 'p1', name: ' Ada ', age: 31 },
@@ -198,12 +189,12 @@ describe('structuredFlow core execution', () => {
     expect(convertResultNode(result)).toMatchObject({
       status: 'ok',
       stepResults: [
-        { id: 'AGE-1', description: 'Check age', status: 'ok', result: { eligible: true } },
+        { id: 'AGE-1', description: 'Check age', status: 'ok', variables: { eligible: true } },
         {
           id: 'NAME-1',
           description: 'Normalize person name',
           status: 'ok',
-          result: {
+          variables: {
             normalizedName: 'ADA',
             info: 'Normalized with a custom fn override.',
           },
@@ -213,17 +204,15 @@ describe('structuredFlow core execution', () => {
   })
 
   it('allows step options to override rule metadata descriptions', () => {
-    const flow = createSyncFlow<PersonData>()
-      .step(
-        meta('OVERRIDE-1', 'Original description'),
-        ({ person }, _params) => ({
-          seen: person.id,
-        }),
-        {
-          description: 'Step option override',
-        }
-      )
-      .build()
+    const flow = createSyncFlow<PersonData>().step(
+      meta('OVERRIDE-1', 'Original description'),
+      ({ person }, _params) => ({
+        seen: person.id,
+      }),
+      {
+        description: 'Rule option override',
+      }
+    )
 
     const result = flow.run({
       person: { id: 'p1b', name: 'Ada', age: 31 },
@@ -231,10 +220,10 @@ describe('structuredFlow core execution', () => {
       checks: [],
     })
 
-    expect(flow.steps).toMatchObject([{ id: 'OVERRIDE-1', options: { description: 'Step option override' } }])
+    expect(flow.steps).toMatchObject([{ id: 'OVERRIDE-1', options: { description: 'Rule option override' } }])
     expect(convertResultNode(result)).toMatchObject({
       status: 'ok',
-      stepResults: [{ id: 'OVERRIDE-1', description: 'Step option override', status: 'ok', result: { seen: 'p1b' } }],
+      stepResults: [{ id: 'OVERRIDE-1', description: 'Rule option override', status: 'ok', variables: { seen: 'p1b' } }],
     })
   })
 
@@ -252,20 +241,18 @@ describe('structuredFlow core execution', () => {
           { ctx: undefined, submissionId: data.person.id },
         ],
       }),
-    })
-      .step(
-        'FNINPUT-1',
-        (data, params) => {
-          expectTypeOf(data).toEqualTypeOf<{ personId: string; route: PersonData['route'] }>()
-          expectTypeOf(params).toEqualTypeOf<{ ctx: undefined; submissionId: string }>()
+    }).step(
+      'FNINPUT-1',
+      (data, params) => {
+        expectTypeOf(data).toEqualTypeOf<{ personId: string; route: PersonData['route'] }>()
+        expectTypeOf(params).toEqualTypeOf<{ ctx: undefined; submissionId: string }>()
 
-          return {
-            seen: `${data.personId}:${data.route}:${params.submissionId}`,
-          }
-        },
-        { description: 'Use fnInput override' }
-      )
-      .build()
+        return {
+          seen: `${data.personId}:${data.route}:${params.submissionId}`,
+        }
+      },
+      { description: 'Use fnInput override' }
+    )
 
     const result = flow.run({
       person: { id: 'p1c', name: 'Ada', age: 31 },
@@ -275,7 +262,7 @@ describe('structuredFlow core execution', () => {
 
     expect(convertResultNode(result)).toMatchObject({
       status: 'ok',
-      stepResults: [{ id: 'FNINPUT-1', result: { seen: 'p1c:approve:p1c' } }],
+      stepResults: [{ id: 'FNINPUT-1', variables: { seen: 'p1c:approve:p1c' } }],
     })
   })
 
@@ -300,7 +287,6 @@ describe('structuredFlow core execution', () => {
       .step(meta('AFTER-1', 'Still runs after remapped exception'), ({ checks }, _params) => ({
         checksSeen: checks.length,
       }))
-      .build()
 
     const result = flow.run({
       person: { id: 'p2', name: 'Max', age: 16 },
@@ -309,13 +295,15 @@ describe('structuredFlow core execution', () => {
     })
 
     expect(result.status).toBe('error')
-    expect(collectFailedStepIds(result.stepResults)).toEqual(['THROW-1'])
+    expect(flattenFailedStepResults(result.stepResults)).toEqual([
+      { id: 'THROW-1', status: 'error', description: 'Convert exception to error', variables: {} },
+    ])
     expect(convertResultNode(result)).toMatchObject({
       status: 'error',
       stepResults: [
-        { id: 'AGE-2', status: 'ok', originalStatus: 'error', result: { reason: 'minor' } },
+        { id: 'AGE-2', status: 'ok', originalStatus: 'error', variables: { reason: 'minor' } },
         { id: 'THROW-1', status: 'error', originalStatus: 'exception' },
-        { id: 'AFTER-1', status: 'ok', result: { checksSeen: 2 } },
+        { id: 'AFTER-1', status: 'ok', variables: { checksSeen: 2 } },
       ],
     })
   })
@@ -328,7 +316,6 @@ describe('structuredFlow core execution', () => {
       .step(meta('AFTER-2', 'Skipped after stop'), (_data, _params) => ({
         unreachable: true,
       }))
-      .build()
 
     const result = flow.run({
       person: { id: 'p3', name: 'Nia', age: 23 },
@@ -340,7 +327,7 @@ describe('structuredFlow core execution', () => {
     expect(convertResultNode(result)).toMatchObject({
       status: 'stop',
       stepResults: [
-        { id: 'STOP-1', status: 'stop', result: { decision: 'reject' } },
+        { id: 'STOP-1', status: 'stop', variables: { decision: 'reject' } },
         { id: 'AFTER-2', status: 'skip' },
       ],
     })
@@ -354,7 +341,6 @@ describe('structuredFlow core execution', () => {
       .step(meta('ASYNC-2', 'Approve score'), async ({ person, checks }, _params) => ({
         approved: person.age >= 18 && checks.includes('audit'),
       }))
-      .build()
 
     const result = await flow.run({
       person: { id: 'p4', name: 'Ivy', age: 27 },
@@ -366,8 +352,8 @@ describe('structuredFlow core execution', () => {
     expect(convertResultNode(result)).toMatchObject({
       status: 'ok',
       stepResults: [
-        { id: 'ASYNC-1', status: 'ok', result: { score: 54 } },
-        { id: 'ASYNC-2', status: 'ok', result: { approved: true } },
+        { id: 'ASYNC-1', status: 'ok', variables: { score: 54 } },
+        { id: 'ASYNC-2', status: 'ok', variables: { approved: true } },
       ],
     })
   })
@@ -377,11 +363,12 @@ describe('structuredFlow core execution', () => {
       meta('PROMISE-1', 'Unexpected promise'),
       async () => ({ loaded: true })
     ) as ReturnType<typeof createSyncBuilder>
-    const flow = builderWithRuntimePromise
-      .step(meta('AFTER-PROMISE', 'Skipped after runtime promise'), (_data, _params) => ({
+    const flow = builderWithRuntimePromise.step(
+      meta('AFTER-PROMISE', 'Skipped after runtime promise'),
+      (_data, _params) => ({
         reached: true,
-      }))
-      .build()
+      })
+    )
 
     const result = flow.run({
       person: { id: 'p4b', name: 'Ivy', age: 27 },
@@ -390,7 +377,9 @@ describe('structuredFlow core execution', () => {
     })
 
     expect(result.status).toBe('exception')
-    expect(collectFailedStepIds(result.stepResults)).toEqual(['PROMISE-1'])
+    expect(flattenFailedStepResults(result.stepResults)).toEqual([
+      { id: 'PROMISE-1', status: 'exception', description: 'Unexpected promise', variables: {} },
+    ])
     expect(convertResultNode(result)).toMatchObject({
       status: 'exception',
       stepResults: [
@@ -401,11 +390,9 @@ describe('structuredFlow core execution', () => {
   })
 
   it('converts class-based results to plain objects', () => {
-    const flow = createSyncBuilder()
-      .step(meta('CONVERT-1', 'Attach description'), (_data, _params) => ({
-        seen: true,
-      }))
-      .build()
+    const flow = createSyncBuilder().step(meta('CONVERT-1', 'Attach description'), (_data, _params) => ({
+      seen: true,
+    }))
 
     const result = flow.run({
       person: { id: 'p5', name: 'Jon', age: 22 },
@@ -418,10 +405,10 @@ describe('structuredFlow core execution', () => {
     expect(result.stepResults[0]).toBeInstanceOf(StepResult)
     expect(converted).toMatchObject({
       status: 'ok',
-      stepResults: [{ id: 'CONVERT-1', description: 'Attach description', status: 'ok', result: { seen: true } }],
+      stepResults: [{ id: 'CONVERT-1', description: 'Attach description', status: 'ok', variables: { seen: true } }],
     })
-    expect(result.stepResults[0].result).toEqual({ seen: true })
-    expect(collectFailedStepIds(result.stepResults)).toEqual([])
+    expect(result.stepResults[0].variables).toEqual({ seen: true })
+    expect(flattenFailedStepResults(result.stepResults)).toEqual([])
   })
 
   it('checks custom step fns against the flow ctx type', () => {
@@ -431,20 +418,20 @@ describe('structuredFlow core execution', () => {
       seen: person.id,
     }))
 
+    // @ts-expect-error invalid step data contract
     builder.step(
       meta('TYPE-2', 'Invalid ctx access'),
-      // @ts-expect-error invalid step data contract
       ({ missing }: { missing: number }, _params: { ctx: undefined }) => ({
         seen: missing,
       })
     )
 
-    expectTypeOf(builder.build().run).toBeFunction()
+    expectTypeOf(builder.run).toBeFunction()
   })
 
   it('runs helper-defined steps with rule metadata and global StepFnResult helpers', () => {
     const ageRule = ruleId('HELPER-1', { description: 'Helper age check', info: { group: 'eligibility' } })
-    const helperStep = defineStep(
+    const helperRule = defineRule(
       ageRule.id,
       ({ person }: PersonData, _params: { ctx: undefined }) => {
         return ok({
@@ -456,7 +443,7 @@ describe('structuredFlow core execution', () => {
       { path: 'person.age', description: ageRule.description, info: ageRule.info }
     )
 
-    const flow = createSyncFlow<PersonData>().step(helperStep).build()
+    const flow = createSyncFlow<PersonData>().step(helperRule)
     const result = flow.run({
       person: { id: 'p6', name: 'Grace', age: 40 },
       route: 'approve',
@@ -473,11 +460,69 @@ describe('structuredFlow core execution', () => {
           status: 'ok',
           path: 'person.age',
           message: 'Age accepted',
-          result: { adult: true },
+          variables: { adult: true },
           results: [{ status: 'skip', message: 'Nested detail', variables: { nested: true } }],
         },
       ],
     })
+  })
+
+  it('flattens failed step results and joins child paths with object navigation format', () => {
+    const childRuleId = ruleId('PATH-FAIL-CHILD', { description: 'Child validation' })
+    const flow = createSyncFlow<PersonData>().step('PATH-FAIL', () =>
+      error({
+        path: 'person',
+        message: 'Person is invalid',
+        variables: { code: 'invalid-person' },
+        results: [
+          error({ path: 'name', message: 'Name is required', variables: { required: true } }),
+          error({
+            message: 'Nested details use the parent path',
+            variables: { inheritedPath: true },
+            results: [error({ path: 'first', variables: { deep: true } })],
+          }).addResult(childRuleId, error({ path: 'last', message: 'Last name is required', variables: { deep: 2 } })),
+        ],
+      })
+    )
+
+    const result = flow.run({
+      person: { id: 'p6b', name: '', age: 40 },
+      route: 'approve',
+      checks: [],
+    })
+
+    expect(flattenFailedStepResults(result.stepResults)).toEqual([
+      {
+        id: 'PATH-FAIL',
+        status: 'error',
+        path: 'person',
+        message: 'Person is invalid',
+        variables: { code: 'invalid-person' },
+      },
+      {
+        id: 'PATH-FAIL',
+        status: 'error',
+        path: 'person.name',
+        message: 'Name is required',
+        variables: { required: true },
+      },
+      {
+        id: 'PATH-FAIL',
+        status: 'error',
+        path: 'person',
+        message: 'Nested details use the parent path',
+        variables: { inheritedPath: true },
+      },
+      { id: 'PATH-FAIL', status: 'error', path: 'person.first', variables: { deep: true } },
+      {
+        id: 'PATH-FAIL-CHILD',
+        status: 'error',
+        description: 'Child validation',
+        path: 'person.last',
+        message: 'Last name is required',
+        variables: { deep: 2 },
+      },
+    ])
   })
 
   it('normalizes boolean and object step returns into result variables', () => {
@@ -485,7 +530,6 @@ describe('structuredFlow core execution', () => {
       .step('BOOL-OK', () => true)
       .step('OBJECT-VARS', ({ person }) => ({ personId: person.id }))
       .step('BOOL-ERROR', () => false)
-      .build()
 
     const result = flow.run({
       person: { id: 'p7', name: 'Lin', age: 20 },
@@ -497,26 +541,26 @@ describe('structuredFlow core execution', () => {
       status: 'error',
       stepResults: [
         { id: 'BOOL-OK', status: 'ok' },
-        { id: 'OBJECT-VARS', status: 'ok', result: { personId: 'p7' } },
+        { id: 'OBJECT-VARS', status: 'ok', variables: { personId: 'p7' } },
         { id: 'BOOL-ERROR', status: 'error' },
       ],
     })
   })
 
-  it('rejects helper steps that are async or use the wrong input signature in sync flows', () => {
-    const asyncHelperStep = defineStep(
+  it('rejects helper rules that are async or use the wrong input signature in sync flows', () => {
+    const asyncHelperRule = defineRule(
       'ASYNC-HELPER',
       async (_data: PersonData) => ({
         reached: true,
       }),
       { description: 'Async helper' }
     )
-    const wrongInputStep = defineStep('WRONG-INPUT', (_data: { missing: true }) => true, { description: 'Wrong input' })
+    const wrongInputRule = defineRule('WRONG-INPUT', (_data: { missing: true }) => true, { description: 'Wrong input' })
 
-    // @ts-expect-error sync flows cannot accept async helper steps
-    createSyncFlow<PersonData>().step(asyncHelperStep)
+    // @ts-expect-error sync flows cannot accept async helper rules
+    createSyncFlow<PersonData>().step(asyncHelperRule)
 
-    // @ts-expect-error helper step input data must match the flow data
-    createSyncFlow<PersonData>().step(wrongInputStep)
+    // @ts-expect-error helper rule input data must match the flow data
+    createSyncFlow<PersonData>().step(wrongInputRule)
   })
 })

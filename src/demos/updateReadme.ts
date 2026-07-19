@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createAsyncFlow, createSyncFlow, error, ruleId } from '../index.ts'
+import { createSyncFlow, error, ruleId, rule } from '../index.ts'
 import { writeMarkdownDocumentation } from './renderMarkdownDocumentation.ts'
 
 const documentationSourceFile = fileURLToPath(import.meta.url)
@@ -52,37 +52,115 @@ function meta(id: string, description: string) {
 }
 
 /* CORE_API:START */
-const loadOccupancies = createAsyncFlow(
-  'IC10',
-  async ({ form }: { form: SubmittedForm }, _params) => ({
-    occupancyCount: form.occupantCount,
-  }),
-  { description: 'Get linked occupancy records' }
+type Person = {
+  id: string
+  name: string
+  age: number
+}
+
+type CoreApiData = {
+  person: Person
+  children: Person[]
+}
+
+const PC10verifyPerson = rule(
+  'PC10',
+  ({ person }: CoreApiData) =>
+    person.name.trim().length > 0
+      ? { personId: person.id, personName: person.name }
+      : error({
+          message: 'Person is invalid.',
+          variables: { info: 'Person failed identity checks.' },
+        }).addResult(
+          ruleId('PC10.name', { description: 'Check person name' }),
+          error({
+            path: 'name',
+            message: 'Person name is required.',
+            variables: { info: 'Person name is required.' },
+          })
+        ),
+  { description: 'Verify person identity' }
 )
+
+const PC20checkChildrenCount = rule(
+  'PC20',
+  ({ children }: CoreApiData) => ({
+    childCount: children.length,
+    hasChildren: children.length > 0,
+  }),
+  { description: 'Check children count' }
+)
+
+const personChecks = createSyncFlow<CoreApiData>()
+  .step(PC10verifyPerson)
   .step(
-    'IC20',
-    ({ form }, _params) =>
-      form.occupantCount >= 2
-        ? { info: 'Occupancy count looks good.' }
-        : error({ variables: { info: 'Expected at least two occupancies.' } }),
-    { description: 'Verify occupancy count' }
+    'PC11',
+    ({ person }) =>
+      person.age >= 18
+        ? { adult: true }
+        : error({
+            path: 'person.age',
+            message: `${person.name} must be an adult.`,
+            variables: { info: `${person.name} must be an adult.` },
+          }),
+    { description: 'Check person age' }
   )
-  .build()
+
+const childrenFlow = createSyncFlow<CoreApiData>()
+  .step(PC20checkChildrenCount)
+  .step(
+    'PC21',
+    ({ children }) => ({
+      childNames: children.map((child) => child.name),
+    }),
+    { description: 'List children' }
+  )
+
+const noChildrenFlow = createSyncFlow<CoreApiData>().step(
+  'PC22',
+  ({ children }) =>
+    children.length === 0
+      ? { noChildren: true }
+      : error({
+          path: 'children',
+          message: 'Expected no children.',
+          variables: { info: 'Expected no children.' },
+        }),
+  { description: 'Confirm no children' }
+)
+
+const householdFlow = createSyncFlow<CoreApiData>()
+  .branch(
+    {
+      mainPerson: personChecks,
+    },
+    { name: 'main person checks', description: 'Run all main person checks', path: 'mainPerson' }
+  )
+  .branch(
+    ({ children }, _params) => (children.length > 0 ? 'children' : 'noChildren'),
+    {
+      children: childrenFlow,
+      noChildren: noChildrenFlow,
+    },
+    {
+      ruleId: ruleId('BR20', { description: 'Route based on whether the person has children' }),
+      name: 'children or no children',
+      description: 'Route based on whether the person has children',
+    }
+  )
 /* CORE_API:END */
 
 /* FLOW_METADATA:START */
 const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
   name: 'Named Review Flow',
   description: 'Demonstrates flow-level name and description metadata.',
-})
-  .step(
-    'META-10',
-    ({ form }, _params) => ({
-      reviewTarget: form.id,
-    }),
-    { description: 'Record the form id as the review target' }
-  )
-  .build()
+}).step(
+  'META-10',
+  ({ form }, _params) => ({
+    reviewTarget: form.id,
+  }),
+  { description: 'Record the form id as the review target' }
+)
 /* FLOW_METADATA:END */
 
 /* CONTEXT_FLOW:START */
@@ -99,7 +177,6 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
     }),
     { description: 'Attach actor context to the review' }
   )
-  .build()
 /* CONTEXT_FLOW:END */
 
 /* MAP_FLOW:START */
@@ -145,7 +222,6 @@ const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
       description: 'Use the same fnInput override after step output has updated the flow data',
     }
   )
-  .build()
 /* MAP_FLOW:END */
 
 /* RULE_FLOW:START */
@@ -165,7 +241,6 @@ const reviewFlow = createSyncFlow<ReviewData>()
     },
     { name: 'REVIEW-1', description: 'Route review' }
   )
-  .build()
 /* RULE_FLOW:END */
 
 export async function writeStructuredProcessExampleMarkdown(
@@ -177,19 +252,36 @@ export async function writeStructuredProcessExampleMarkdown(
     outputFile,
     printReport: true,
     formatter: (node) => ({
-      title: node.id,
+      title:
+        node.options != null && 'name' in node.options && typeof node.options.name === 'string'
+          ? node.options.name
+          : (node.id ?? ''),
       description: node.options?.description ?? '',
     }),
     flows: [
       {
         id: 'CORE_API',
         title: 'Core API',
-        description: 'Basic async validation flow with a fixed input ctx.',
-        flow: loadOccupancies,
+        description: 'Basic sync flow with reusable rule() helpers and branches.',
+        flow: householdFlow,
         demos: [
           {
-            id: 'ok',
-            init: { form: { id: '200', occupantCount: 2, requiresManualReview: false } },
+            id: 'no_kids',
+            init: { person: { id: 'p1', name: 'Ada', age: 37 }, children: [] },
+          },
+          {
+            id: 'two_kids',
+            init: {
+              person: { id: 'p2', name: 'Grace', age: 42 },
+              children: [
+                { id: 'c1', name: 'Lin', age: 8 },
+                { id: 'c2', name: 'Mika', age: 6 },
+              ],
+            },
+          },
+          {
+            id: 'missing_name',
+            init: { person: { id: 'p3', name: '', age: 29 }, children: [] },
           },
         ],
       },
