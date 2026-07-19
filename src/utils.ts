@@ -9,5 +9,5 @@ export function getOwnEntries<T extends Record<PropertyKey, unknown>>(
 }
 
 export function isPromise<T>(value: object): value is Promise<T> {
-  return 'then' in value && typeof value.then === 'function'
+  return value != null && typeof value === 'object' && 'then' in value && typeof value.then === 'function'
 }

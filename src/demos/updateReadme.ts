@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow.ts'
+import { createAsyncFlow, createSyncFlow, error, ruleId } from '../index.ts'
 import { writeMarkdownDocumentation } from './renderMarkdownDocumentation.ts'
 
 const documentationSourceFile = fileURLToPath(import.meta.url)
@@ -36,38 +36,19 @@ type MapFlowData = {
   summary?: string
 }
 
-type MapFlowMapper = (params: {
-  id: string
-  data: MapFlowData
-  ctx: undefined
-}) => {
+type MapFlowMapper = (params: { id: string; data: MapFlowData; ctx: undefined }) => {
   submissionId: string
   occupancyCount: number
   requiresManualReview: boolean
   summary?: string
   fnInput: [
     { submissionId: string; occupancyCount: number; summary?: string },
-    { ctx: undefined; submissionId: string; occupancyCount: number; requiresManualReview: boolean; summary?: string }
+    { ctx: undefined; submissionId: string; occupancyCount: number; requiresManualReview: boolean; summary?: string },
   ]
 }
 
-type StepInfo = {
-  id: string
-  description: string
-  fn?: (data: ReviewData, params: { ctx: unknown }) => Record<string, unknown> | Promise<Record<string, unknown>>
-}
-
-function resolveStepMeta({
-  id,
-  description,
-}: {
-  id: StepInfo
-  description?: string
-}) {
-  return {
-    id: id.id,
-    description: description ?? id.description,
-  }
+function meta(id: string, description: string) {
+  return ruleId(id, { description })
 }
 
 /* CORE_API:START */
@@ -81,10 +62,9 @@ const loadOccupancies = createAsyncFlow(
   .step(
     'IC20',
     ({ form }, _params) =>
-      stepResult({
-        status: form.occupantCount >= 2 ? 'ok' : 'error',
-        info: form.occupantCount >= 2 ? 'Occupancy count looks good.' : 'Expected at least two occupancies.',
-      }),
+      form.occupantCount >= 2
+        ? { info: 'Occupancy count looks good.' }
+        : error({ variables: { info: 'Expected at least two occupancies.' } }),
     { description: 'Verify occupancy count' }
   )
   .build()
@@ -158,12 +138,9 @@ const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
   .step(
     'MAP-20',
     (data, params) =>
-      stepResult({
-        status: params.requiresManualReview ? 'error' : 'ok',
-        info: params.requiresManualReview
-          ? `Escalate ${data.summary ?? 'missing-summary'}`
-          : `Auto-approve ${data.summary ?? 'missing-summary'}`,
-      }),
+      params.requiresManualReview
+        ? error({ variables: { info: `Escalate ${data.summary ?? 'missing-summary'}` } })
+        : { info: `Auto-approve ${data.summary ?? 'missing-summary'}` },
     {
       description: 'Use the same fnInput override after step output has updated the flow data',
     }
@@ -171,48 +148,25 @@ const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
   .build()
 /* MAP_FLOW:END */
 
-/* RESOLVER_FLOW:START */
-const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
-  resolver: resolveStepMeta,
-})
-  .step({
-    id: 'VALIDATE-1',
-    description: 'Validate request',
-    fn: ({ form }, _params) => ({
-      valid: form.id.length > 0,
-    }),
-  })
+/* RULE_FLOW:START */
+const reviewFlow = createSyncFlow<ReviewData>()
+  .step(meta('VALIDATE-1', 'Validate request'), ({ form }, _params) => ({
+    valid: form.id.length > 0,
+  }))
   .branch(
-    {
-      id: 'REVIEW-1',
-      description: 'Route review',
-    },
     ({ form }, _params) => (form.requiresManualReview ? 'manual' : 'auto'),
     {
-      auto: createSyncFlow<StepInfo, ReviewData>({
-        resolver: resolveStepMeta,
-      }).step({
-        id: 'AUTO-1',
-        description: 'Auto approve',
-        fn: ({ checks }, _params) => ({
-          checksSeen: checks.length,
-        }),
-      }),
-      manual: createSyncFlow<StepInfo, ReviewData>({
-        resolver: resolveStepMeta,
-      }).step({
-        id: 'MANUAL-1',
-        description: 'Send to manual review',
-        fn: ({ form }, _params) =>
-          stepResult({
-            status: 'error',
-            info: `Manual review required for ${form.id}.`,
-          }),
-      }),
-    }
+      auto: createSyncFlow<ReviewData>().step(meta('AUTO-1', 'Auto approve'), ({ checks }, _params) => ({
+        checksSeen: checks.length,
+      })),
+      manual: createSyncFlow<ReviewData>().step(meta('MANUAL-1', 'Send to manual review'), ({ form }, _params) =>
+        error({ variables: { info: `Manual review required for ${form.id}.` } })
+      ),
+    },
+    { name: 'REVIEW-1', description: 'Route review' }
   )
   .build()
-/* RESOLVER_FLOW:END */
+/* RULE_FLOW:END */
 
 export async function writeStructuredProcessExampleMarkdown(
   outputFile = join(dirname(fileURLToPath(import.meta.url)), '../..', 'README.md')
@@ -277,9 +231,9 @@ export async function writeStructuredProcessExampleMarkdown(
         ],
       },
       {
-        id: 'RESOLVER_FLOW',
-        title: 'Resolver-based flow',
-        description: 'Flow created with resolver so step ids carry their own description and optional step fn.',
+        id: 'RULE_FLOW',
+        title: 'Rule helper flow',
+        description: 'Flow using ruleId() to keep ids and descriptions together while step functions stay explicit.',
         flow: reviewFlow,
         demos: [
           {

@@ -1,11 +1,11 @@
-import type { StepFnPayload, StepStatus } from './flowClasses.ts'
+import type { StepStatus } from './flowClasses.ts'
 import { BranchStepFlowResult, FlowResult, StepResult } from './flowClasses.ts'
 
 export type FailedStepIdOptions = {
   branchPrefix?: boolean
 }
 
-type ResultNode = FlowResult<any> | StepResult<any> | BranchStepFlowResult
+type ResultNode = FlowResult | StepResult | BranchStepFlowResult
 type ResultConverter = (value: ResultNode) => any
 
 type ConvertedStepResult = {
@@ -13,7 +13,10 @@ type ConvertedStepResult = {
   description?: string
   status: StepStatus
   originalStatus?: StepStatus
-  result?: StepFnPayload
+  path?: string
+  message?: string
+  result?: Record<string, unknown>
+  results?: Record<string, unknown>[]
   selectedBranchKeys?: PropertyKey[]
   branches?: ConvertedBranchStepFlowResult[]
 }
@@ -29,19 +32,19 @@ type ConvertedFlowResult = {
   stepResults: ConvertedStepResult[]
 }
 
-type ResultTreeStep<TBranch> = {
+type ResultTreeStep = {
   stepInfo: { id: string }
   status: StepStatus
-  branches?: TBranch[]
+  branches?: ResultTreeBranch[]
 }
 
-type ResultTreeBranch<TStep> = {
-  stepResults: TStep[]
+type ResultTreeBranch = {
+  stepResults: ResultTreeStep[]
 }
 
-function visitResultTree<TStep extends ResultTreeStep<TBranch>, TBranch extends ResultTreeBranch<TStep>>(
-  stepResults: readonly TStep[],
-  visit: (stepResult: TStep, branchPath: string[]) => void,
+function visitResultTree(
+  stepResults: readonly ResultTreeStep[],
+  visit: (stepResult: ResultTreeStep, branchPath: string[]) => void,
   branchPath: string[] = []
 ): void {
   for (const stepResult of stepResults) {
@@ -105,7 +108,10 @@ function defaultResultConverter(
     ...(value.stepInfo.options?.description === undefined ? {} : { description: value.stepInfo.options.description }),
     status: value.status,
     ...(value.originalStatus === undefined ? {} : { originalStatus: value.originalStatus }),
-    ...(value.result === undefined ? {} : { result: value.result as StepFnPayload }),
+    ...(value.path === undefined ? {} : { path: value.path }),
+    ...(value.message === undefined ? {} : { message: value.message }),
+    ...(value.result === undefined ? {} : { result: value.result as Record<string, unknown> }),
+    ...(value.results === undefined ? {} : { results: value.results as unknown as Record<string, unknown>[] }),
     ...(value.selectedBranchKeys == null ? {} : { selectedBranchKeys: value.selectedBranchKeys }),
     ...(value.branches == null ? {} : { branches: [] }),
   }

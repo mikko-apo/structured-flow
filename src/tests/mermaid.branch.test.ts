@@ -1,19 +1,20 @@
 import { describe, expect, it } from 'vitest'
 
 import { renderProcessAsMermaidGraph } from '../mermaidRenderer'
-import { createAsyncFlow, createSyncFlow, stepResult } from '../structuredFlow'
+import { createAsyncFlow, createSyncFlow, error, skip } from '../index'
 
 describe('renderProcessAsMermaidGraph', () => {
   it('renders a static graph from a flow definition', () => {
     const flow = createSyncFlow<{ route: 'approve' | 'reject' }>()
       .branch(
-        'ROUTE-1',
         ({ route }) => route,
         {
-          approve: createSyncFlow('APP-1', (_data, _params) => ({ approved: true }), { description: 'Approve request' }),
+          approve: createSyncFlow('APP-1', (_data, _params) => ({ approved: true }), {
+            description: 'Approve request',
+          }),
           reject: createSyncFlow('REJ-1', (_data, _params) => ({ rejected: true }), { description: 'Reject request' }),
         },
-        { description: 'Route request' }
+        { name: 'ROUTE-1', description: 'Route request' }
       )
       .build()
 
@@ -30,7 +31,6 @@ describe('renderProcessAsMermaidGraph', () => {
     const rejectKey = Symbol('reject')
     const flow = createSyncFlow<{ route: 'approve' | 'reject' }>()
       .branch(
-        'ROUTE-SYMBOL',
         ({ route }) => (route === 'approve' ? approveKey : rejectKey),
         {
           [approveKey]: createSyncFlow('APP-SYMBOL', (_data, _params) => ({ approved: true }), {
@@ -40,7 +40,7 @@ describe('renderProcessAsMermaidGraph', () => {
             description: 'Reject symbol request',
           }),
         },
-        { description: 'Route symbol request' }
+        { name: 'ROUTE-SYMBOL', description: 'Route symbol request' }
       )
       .build()
 
@@ -57,7 +57,6 @@ describe('renderProcessAsMermaidGraph', () => {
     const rejectKey = Symbol('reject')
     const flow = createSyncFlow<{ route: 'approve' | 'reject' }>()
       .branch(
-        'ROUTE-SYMBOL-RUN',
         ({ route }) => (route === 'approve' ? approveKey : rejectKey),
         {
           [approveKey]: createSyncFlow('APP-SYMBOL-RUN', (_data, _params) => ({ approved: true }), {
@@ -67,7 +66,7 @@ describe('renderProcessAsMermaidGraph', () => {
             description: 'Reject symbol request',
           }),
         },
-        { description: 'Route symbol request' }
+        { name: 'ROUTE-SYMBOL-RUN', description: 'Route symbol request' }
       )
       .build()
 
@@ -84,20 +83,14 @@ describe('renderProcessAsMermaidGraph', () => {
   it('renders selected branch keys even when the selected child branch is skipped', () => {
     const flow = createSyncFlow<{ route: 'approve' | 'reject' }>()
       .branch(
-        'ROUTE-SKIP',
         ({ route }) => route,
         {
-          approve: createSyncFlow(
-            'APP-SKIP',
-            (_data, _params) =>
-              stepResult({
-                status: 'skip',
-              }),
-            { description: 'Approve but skip' }
-          ),
-          reject: createSyncFlow('REJ-SKIP', (_data, _params) => ({ rejected: true }), { description: 'Reject request' }),
+          approve: createSyncFlow('APP-SKIP', (_data, _params) => skip(), { description: 'Approve but skip' }),
+          reject: createSyncFlow('REJ-SKIP', (_data, _params) => ({ rejected: true }), {
+            description: 'Reject request',
+          }),
         },
-        { description: 'Route request' }
+        { name: 'ROUTE-SKIP', description: 'Route request' }
       )
       .build()
 
@@ -114,22 +107,18 @@ describe('renderProcessAsMermaidGraph', () => {
     const rulesFlow = createAsyncFlow(
       'RULES-1',
       async ({ checks }: { checks: Array<'audit' | 'rules'> }, _params) =>
-        stepResult({
-          status: checks.includes('rules') ? 'error' : 'ok',
-          info: 'Rules failed.',
-        }),
+        checks.includes('rules') ? error({ variables: { info: 'Rules failed.' } }) : { info: 'Rules passed.' },
       { description: 'Rules' }
     )
 
     const flow = createAsyncFlow<{ checks: Array<'audit' | 'rules'> }>()
       .branch(
-        'BR-1',
         ({ checks }) => checks,
         {
           audit: createAsyncFlow('AUDIT-1', async (_data, _params) => ({ audited: true }), { description: 'Audit' }),
           rules: rulesFlow,
         },
-        { description: 'Run selected checks' }
+        { name: 'BR-1', description: 'Run selected checks' }
       )
       .build()
 

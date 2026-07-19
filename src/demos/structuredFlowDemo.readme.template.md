@@ -8,7 +8,8 @@ Structured flow gives you:
 - Typed `data` and optional `ctx` across the whole flow
 - Branching into child flows without leaking child payloads back to the parent flow
 - Recorded execution results that can be rendered as HTML tables or Mermaid graphs
-- Metadata hooks for step ids and descriptions through `resolver`
+- Metadata helpers for reusable step ids and descriptions
+- Flow-level metadata resolution for final step ids and descriptions
 - Runtime payload remapping through `map`
 
 {{TOC}}
@@ -23,7 +24,7 @@ Structured flow gives you:
 createSyncFlow<Data>()
 createAsyncFlow<Data>()
 
-createSyncFlow<StepId, Data>({
+createSyncFlow<Data>({
   name,
   description,
   resolver,
@@ -33,12 +34,13 @@ createSyncFlow<StepId, Data>({
 createSyncFlow(stepId, stepFn, stepOptions?)
 createAsyncFlow(stepId, stepFn, stepOptions?)
 
-createSyncFlow(branchId, select, branches, stepOptions?)
-createAsyncFlow(branchId, select, branches, stepOptions?)
+createSyncFlow(select, branches, branchOptions?)
+createAsyncFlow(select, branches, branchOptions?)
 ```
 
 Use the empty generic form when your first `step()` should define the flow. Use the config form when you want flow-level
-metadata or typed object step ids. Use the positional forms for short one-step or one-branch flows.
+metadata, a flow-level `resolver`, or a flow-level `map`. Use the positional forms for short one-step or one-branch
+flows.
 
 ## Flow options
 
@@ -46,16 +48,16 @@ Flow config currently supports:
 
 - `name?: string`: stored on the built flow as metadata
 - `description?: string`: stored on the built flow as metadata
-- `resolver?: ({ id, description }) => ({ id, description? })`: resolves metadata for object-valued step ids
+- `resolver?: (stepId) => string | RuleId | { id: string; description?: string }`: maps each `string`, `RuleId`, or `Step` id to its final recorded metadata
 - `map?: ({ id, data, ctx, stepOptions, params }) => object`: augments callback params, and can optionally return `fnInput: [data, params]` to override the callback signature
 
-`resolver` is metadata-only. It does not change runtime payloads. `map` is runtime-only. By default it augments the
-second callback parameter while `data` remains the flow's accumulated data object. When a map returns
-`fnInput: [data, params]`, that tuple becomes the callback signature for that node.
+`resolver` is metadata-only and is configured on the flow builder. `step()` and `branch()` do not have resolver options.
+`map` is runtime-only. By default it augments the second callback parameter while `data` remains the flow's accumulated
+data object. When a map returns `fnInput: [data, params]`, that tuple becomes the callback signature for that node.
 
 ## Step and branch options
 
-`step()` and `branch()` both accept `StepOptions`:
+`step()` and `branch()` accept option objects:
 
 ```ts
 {
@@ -64,14 +66,12 @@ second callback parameter while `data` remains the flow's accumulated data objec
     error?: 'ignore' | 'exception'
     exception?: 'error'
   }
-  resolver?: ({ id, description }) => ({ id, description? })
   map?: ({ id, data, ctx, stepOptions, params }) => object & {
     fnInput?: [data: object, params: object]
   }
 }
 ```
 
-The flow-level resolver runs by default. A step-level or branch-level resolver can override the metadata for that node.
 The flow-level `map` runs before a step-level or branch-level `map`.
 
 ## Runtime behavior
@@ -82,7 +82,7 @@ The flow-level `map` runs before a step-level or branch-level `map`.
 - With `map`, its returned fields are merged into `params` and `params.ctx` stays available
 - With `map().fnInput`, the callback is invoked with that explicit `[data, params]` tuple instead
 - `withContext<Ctx>()` enables `flow.run(data, ctx)` and types downstream callbacks accordingly
-- `stepResult({ status, ...payload })` records status and keeps non-status fields as result payload
+- Plain object returns record `ok` payloads; use `ok()`, `error()`, `stop()`, `skip()`, or `exception()` for explicit statuses
 
 Status handling:
 
@@ -179,24 +179,22 @@ This flow demonstrates runtime params augmentation and `fnInput`. The flow-level
 
 {{MAP_FLOW_manual_FULL_TABLE}}
 
-## Resolver And Branch Example
+## Rule Helper And Branch Example
 
-This example uses object-valued step ids with a flow-level resolver. Each object provides the source metadata and can
-also provide a default `fn`. The resolver turns that object into the stored `{ id, description }` metadata. A
-step-level resolver can override the flow-level resolver for one node when needed.
+This example uses `ruleId()` so ids and descriptions can be defined together while step functions remain explicit.
 
-{{RESOLVER_FLOW_CODE_BLOCK}}
+{{RULE_FLOW_CODE_BLOCK}}
 
 ### Flow Layout
 
-{{RESOLVER_FLOW_FLOW_HTML}}
+{{RULE_FLOW_FLOW_HTML}}
 
 ### Static Graph
 
-{{RESOLVER_FLOW_STATIC_GRAPH}}
+{{RULE_FLOW_STATIC_GRAPH}}
 
 ### Example Run
 
-{{RESOLVER_FLOW_manual_FULL_TABLE}}
+{{RULE_FLOW_manual_FULL_TABLE}}
 
 {{LEAF_FLOWS_HTML}}

@@ -20,23 +20,16 @@
     "url": "https://github.com/mikko-apo/structured-flow/issues"
   },
   "type": "module",
-  "main": "./dist/structuredFlow.js",
-  "types": "./dist/structuredFlow.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/structuredFlow.d.ts",
-      "import": "./dist/structuredFlow.js"
-    },
-    "./mermaidRenderer": {
-      "types": "./dist/mermaidRenderer.d.ts",
-      "import": "./dist/mermaidRenderer.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "files": [
-    "dist/structuredFlow.js",
-    "dist/structuredFlow.d.ts",
-    "dist/mermaidRenderer.js",
-    "dist/mermaidRenderer.d.ts",
+    "dist",
     "README.md",
     "LICENSE"
   ],

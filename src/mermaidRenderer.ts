@@ -1,14 +1,21 @@
 import { getOwnEntries } from './utils.ts'
-import { type FlowLike, type FlowResult, type FlowStepInfo, StepBranchInfo, type StepResult, type StepStatus } from './flowClasses.ts'
+import {
+  type FlowLike,
+  type FlowResult,
+  type FlowStepInfo,
+  StepBranchInfo,
+  type StepResult,
+  type StepStatus,
+} from './flowClasses.ts'
 
-type MermaidStepResult = StepResult<any, any>
+type MermaidStepResult = StepResult
 type MermaidRenderable =
   | {
       steps: readonly FlowStepInfo[]
       asyncMode: 'sync' | 'async'
       allowsContext: boolean
     }
-  | Pick<FlowResult<any>, 'status' | 'stepResults'>
+  | Pick<FlowResult, 'status' | 'stepResults'>
 
 type RenderableBranch = {
   key: PropertyKey
@@ -17,7 +24,7 @@ type RenderableBranch = {
   stepResultById?: Map<string, MermaidStepResult>
 }
 
-function hasStepResults(value: MermaidRenderable): value is Pick<FlowResult<any>, 'status' | 'stepResults'> {
+function hasStepResults(value: MermaidRenderable): value is Pick<FlowResult, 'status' | 'stepResults'> {
   return 'stepResults' in value
 }
 

@@ -8,7 +8,8 @@ Structured flow gives you:
 - Typed `data` and optional `ctx` across the whole flow
 - Branching into child flows without leaking child payloads back to the parent flow
 - Recorded execution results that can be rendered as HTML tables or Mermaid graphs
-- Metadata hooks for step ids and descriptions through `resolver`
+- Metadata helpers for reusable step ids and descriptions
+- Flow-level metadata resolution for final step ids and descriptions
 - Runtime payload remapping through `map`
 
 - [Core API](#core-api-flow-html)
@@ -19,8 +20,8 @@ Structured flow gives you:
   - [Reviewer](#context-flow-reviewer-full-table)
 - [Mapped payload flow](#map-flow-flow-html)
   - [Manual](#map-flow-manual-full-table)
-- [Resolver-based flow](#resolver-flow-flow-html)
-  - [Manual](#resolver-flow-manual-full-table)
+- [Rule helper flow](#rule-flow-flow-html)
+  - [Manual](#rule-flow-manual-full-table)
 - [AUTO-1](#auto-1-flow)
 - [MANUAL-1](#manual-1-flow)
 
@@ -34,7 +35,7 @@ Structured flow gives you:
 createSyncFlow<Data>()
 createAsyncFlow<Data>()
 
-createSyncFlow<StepId, Data>({
+createSyncFlow<Data>({
   name,
   description,
   resolver,
@@ -44,12 +45,13 @@ createSyncFlow<StepId, Data>({
 createSyncFlow(stepId, stepFn, stepOptions?)
 createAsyncFlow(stepId, stepFn, stepOptions?)
 
-createSyncFlow(branchId, select, branches, stepOptions?)
-createAsyncFlow(branchId, select, branches, stepOptions?)
+createSyncFlow(select, branches, branchOptions?)
+createAsyncFlow(select, branches, branchOptions?)
 ```
 
 Use the empty generic form when your first `step()` should define the flow. Use the config form when you want flow-level
-metadata or typed object step ids. Use the positional forms for short one-step or one-branch flows.
+metadata, a flow-level `resolver`, or a flow-level `map`. Use the positional forms for short one-step or one-branch
+flows.
 
 ## Flow options
 
@@ -57,16 +59,16 @@ Flow config currently supports:
 
 - `name?: string`: stored on the built flow as metadata
 - `description?: string`: stored on the built flow as metadata
-- `resolver?: ({ id, description }) => ({ id, description? })`: resolves metadata for object-valued step ids
+- `resolver?: (stepId) => string | RuleId | { id: string; description?: string }`: maps each `string`, `RuleId`, or `Step` id to its final recorded metadata
 - `map?: ({ id, data, ctx, stepOptions, params }) => object`: augments callback params, and can optionally return `fnInput: [data, params]` to override the callback signature
 
-`resolver` is metadata-only. It does not change runtime payloads. `map` is runtime-only. By default it augments the
-second callback parameter while `data` remains the flow's accumulated data object. When a map returns
-`fnInput: [data, params]`, that tuple becomes the callback signature for that node.
+`resolver` is metadata-only and is configured on the flow builder. `step()` and `branch()` do not have resolver options.
+`map` is runtime-only. By default it augments the second callback parameter while `data` remains the flow's accumulated
+data object. When a map returns `fnInput: [data, params]`, that tuple becomes the callback signature for that node.
 
 ## Step and branch options
 
-`step()` and `branch()` both accept `StepOptions`:
+`step()` and `branch()` accept option objects:
 
 ```ts
 {
@@ -75,14 +77,12 @@ second callback parameter while `data` remains the flow's accumulated data objec
     error?: 'ignore' | 'exception'
     exception?: 'error'
   }
-  resolver?: ({ id, description }) => ({ id, description? })
   map?: ({ id, data, ctx, stepOptions, params }) => object & {
     fnInput?: [data: object, params: object]
   }
 }
 ```
 
-The flow-level resolver runs by default. A step-level or branch-level resolver can override the metadata for that node.
 The flow-level `map` runs before a step-level or branch-level `map`.
 
 ## Runtime behavior
@@ -93,7 +93,7 @@ The flow-level `map` runs before a step-level or branch-level `map`.
 - With `map`, its returned fields are merged into `params` and `params.ctx` stays available
 - With `map().fnInput`, the callback is invoked with that explicit `[data, params]` tuple instead
 - `withContext<Ctx>()` enables `flow.run(data, ctx)` and types downstream callbacks accordingly
-- `stepResult({ status, ...payload })` records status and keeps non-status fields as result payload
+- Plain object returns record `ok` payloads; use `ok()`, `error()`, `stop()`, `skip()`, or `exception()` for explicit statuses
 
 Status handling:
 
@@ -131,10 +131,9 @@ const loadOccupancies = createAsyncFlow(
   .step(
     'IC20',
     ({ form }, _params) =>
-      stepResult({
-        status: form.occupantCount >= 2 ? 'ok' : 'error',
-        info: form.occupantCount >= 2 ? 'Occupancy count looks good.' : 'Expected at least two occupancies.',
-      }),
+      form.occupantCount >= 2
+        ? { info: 'Occupancy count looks good.' }
+        : error({ variables: { info: 'Expected at least two occupancies.' } }),
     { description: 'Verify occupancy count' }
   )
   .build()
@@ -599,12 +598,9 @@ const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
   .step(
     'MAP-20',
     (data, params) =>
-      stepResult({
-        status: params.requiresManualReview ? 'error' : 'ok',
-        info: params.requiresManualReview
-          ? `Escalate ${data.summary ?? 'missing-summary'}`
-          : `Auto-approve ${data.summary ?? 'missing-summary'}`,
-      }),
+      params.requiresManualReview
+        ? error({ variables: { info: `Escalate ${data.summary ?? 'missing-summary'}` } })
+        : { info: `Auto-approve ${data.summary ?? 'missing-summary'}` },
     {
       description: 'Use the same fnInput override after step output has updated the flow data',
     }
@@ -758,60 +754,35 @@ Escalate missing-summary"]
 </table>
 <!-- structured-process-demo:map-flow-manual:html-table:end --></div></div>
 
-## Resolver And Branch Example
+## Rule Helper And Branch Example
 
-This example uses object-valued step ids with a flow-level resolver. Each object provides the source metadata and can
-also provide a default `fn`. The resolver turns that object into the stored `{ id, description }` metadata. A
-step-level resolver can override the flow-level resolver for one node when needed.
+This example uses `ruleId()` so ids and descriptions can be defined together while step functions remain explicit.
 
-<a id="resolver-flow-code-block"></a>
+<a id="rule-flow-code-block"></a>
 ```ts
-const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
-  resolver: resolveStepMeta,
-})
-  .step({
-    id: 'VALIDATE-1',
-    description: 'Validate request',
-    fn: ({ form }, _params) => ({
-      valid: form.id.length > 0,
-    }),
-  })
+const reviewFlow = createSyncFlow<ReviewData>()
+  .step(meta('VALIDATE-1', 'Validate request'), ({ form }, _params) => ({
+    valid: form.id.length > 0,
+  }))
   .branch(
-    {
-      id: 'REVIEW-1',
-      description: 'Route review',
-    },
     ({ form }, _params) => (form.requiresManualReview ? 'manual' : 'auto'),
     {
-      auto: createSyncFlow<StepInfo, ReviewData>({
-        resolver: resolveStepMeta,
-      }).step({
-        id: 'AUTO-1',
-        description: 'Auto approve',
-        fn: ({ checks }, _params) => ({
-          checksSeen: checks.length,
-        }),
-      }),
-      manual: createSyncFlow<StepInfo, ReviewData>({
-        resolver: resolveStepMeta,
-      }).step({
-        id: 'MANUAL-1',
-        description: 'Send to manual review',
-        fn: ({ form }, _params) =>
-          stepResult({
-            status: 'error',
-            info: `Manual review required for ${form.id}.`,
-          }),
-      }),
-    }
+      auto: createSyncFlow<ReviewData>().step(meta('AUTO-1', 'Auto approve'), ({ checks }, _params) => ({
+        checksSeen: checks.length,
+      })),
+      manual: createSyncFlow<ReviewData>().step(meta('MANUAL-1', 'Send to manual review'), ({ form }, _params) =>
+        error({ variables: { info: `Manual review required for ${form.id}.` } })
+      ),
+    },
+    { name: 'REVIEW-1', description: 'Route review' }
   )
   .build()
 ```
 
 ### Flow Layout
 
-<a id="resolver-flow-flow-html"></a>
-<!-- structured-process-demo:resolver-flow-flow-html:html-table:start -->
+<a id="rule-flow-flow-html"></a>
+<!-- structured-process-demo:rule-flow-flow-html:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>VALIDATE-1</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">VALIDATE-1</div><div style="margin-top:4px;color:#334155;font-size:13px;">Validate request</div></td>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="color:#94a3b8;">-</div></td>
@@ -831,14 +802,14 @@ const reviewFlow = createSyncFlow<StepInfo, ReviewData>({
 </tr></tbody></table></div>
 </div></div></td>
 </tr></tbody></table>
-<!-- structured-process-demo:resolver-flow-flow-html:html-table:end -->
+<!-- structured-process-demo:rule-flow-flow-html:html-table:end -->
 
 ### Static Graph
 
-<a id="resolver-flow-static-graph"></a>
+<a id="rule-flow-static-graph"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><p><strong>Result JSON</strong><br>No run result yet.</p></div><div><div>
 
-<!-- structured-process-demo:resolver-flow-static-graph:mermaid:start -->
+<!-- structured-process-demo:rule-flow-static-graph:mermaid:start -->
 ```mermaid
 flowchart TD
   start([Start])
@@ -871,7 +842,7 @@ end"]
   classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2
   classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569
 ```
-<!-- structured-process-demo:resolver-flow-static-graph:mermaid:end -->
+<!-- structured-process-demo:rule-flow-static-graph:mermaid:end -->
 
 </div></div><div><table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>VALIDATE-1</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">VALIDATE-1</div><div style="margin-top:4px;color:#334155;font-size:13px;">Validate request</div></td>
@@ -895,11 +866,11 @@ end"]
 
 ### Example Run
 
-<a id="resolver-flow-manual-full-table"></a>
+<a id="rule-flow-manual-full-table"></a>
 <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start;"><div><div>
 
 <p><strong>Initial flow.run() input</strong></p>
-<!-- structured-process-demo:resolver-flow-manual-init:json:start -->
+<!-- structured-process-demo:rule-flow-manual-init:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;form&quot;: {
@@ -913,10 +884,10 @@ end"]
   ]
 }</code>
 </pre>
-<!-- structured-process-demo:resolver-flow-manual-init:json:end -->
+<!-- structured-process-demo:rule-flow-manual-init:json:end -->
 
 <p><strong>Resulting JSON</strong></p>
-<!-- structured-process-demo:resolver-flow-manual-result:json:start -->
+<!-- structured-process-demo:rule-flow-manual-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
   &quot;status&quot;: &quot;error&quot;,
@@ -971,11 +942,11 @@ end"]
   ]
 }</code>
 </pre>
-<!-- structured-process-demo:resolver-flow-manual-result:json:end -->
+<!-- structured-process-demo:rule-flow-manual-result:json:end -->
 
 </div></div><div><div>
 
-<!-- structured-process-demo:resolver-flow-manual:mermaid:start -->
+<!-- structured-process-demo:rule-flow-manual:mermaid:start -->
 ```mermaid
 flowchart TD
   start([Start])
@@ -1021,10 +992,10 @@ Manual review required for 400."]
   class start executed
   class done failure
 ```
-<!-- structured-process-demo:resolver-flow-manual:mermaid:end -->
+<!-- structured-process-demo:rule-flow-manual:mermaid:end -->
 
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span><br><strong>Failed steps:</strong> REVIEW-1, MANUAL-1</p>
-<!-- structured-process-demo:resolver-flow-manual:html-table:start -->
+<!-- structured-process-demo:rule-flow-manual:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:14px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Payload</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead>
 <tbody><tr>
@@ -1055,7 +1026,7 @@ Manual review required for 400."]
 </div></td>
 </tr></tbody>
 </table>
-<!-- structured-process-demo:resolver-flow-manual:html-table:end --></div></div>
+<!-- structured-process-demo:rule-flow-manual:html-table:end --></div></div>
 
 ## Referenced leaf flows
 
@@ -1066,7 +1037,7 @@ Auto approve
 
 **Referenced from**
 
-- Resolver-based flow
+- Rule helper flow
 <!-- structured-process-demo:auto-1-flow-html:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>AUTO-1</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">AUTO-1</div><div style="margin-top:4px;color:#334155;font-size:13px;">Auto approve</div></td>
@@ -1081,7 +1052,7 @@ Send to manual review
 
 **Referenced from**
 
-- Resolver-based flow
+- Rule helper flow
 <!-- structured-process-demo:manual-1-flow-html:html-table:start -->
 <table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;width:32%;">Step</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Branches</th></tr></thead><tbody><tr>
 <td style="padding:10px;border-bottom:1px solid #d0d7de;vertical-align:top;width:32%;"><div><strong>MANUAL-1</strong></div><div style="margin-top:2px;color:#475569;font-size:12px;">MANUAL-1</div><div style="margin-top:4px;color:#334155;font-size:13px;">Send to manual review</div></td>

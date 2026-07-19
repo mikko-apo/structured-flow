@@ -31,7 +31,7 @@ type FlowLike = {
   steps: readonly FlowStepInfo[]
   asyncMode: 'sync' | 'async'
   allowsContext: boolean
-  run(...args: [data: object] | [data: object, ctx: unknown]): Promise<FlowResult<any>> | FlowResult<any>
+  run(...args: [data: object] | [data: object, ctx: unknown]): Promise<FlowResult> | FlowResult
 }
 
 type DocumentationDemo<InitialCtx extends object> = {
@@ -141,7 +141,7 @@ type WriteMarkdownDocumentationOptions<
 
 type DemoRender<InitialCtx extends object> = {
   demo: DocumentationDemo<InitialCtx>
-  result: FlowResult<any>
+  result: FlowResult
   convertedResult: ConvertedFlowResult
   failedStepIds: string[]
 }
@@ -741,7 +741,7 @@ function renderStaticFlowHtmlBlock(
 function renderDemoResultParts(
   markerId: string,
   runInput: unknown,
-  result: Pick<FlowResult<any>, 'status' | 'stepResults'>,
+  result: Pick<FlowResult, 'status' | 'stepResults'>,
   convertedResult: ConvertedFlowResult,
   failedStepIds: string[]
 ) {
@@ -765,7 +765,7 @@ function renderDemoResultParts(
 function renderDemoResultSection(
   markerId: string,
   runInput: unknown,
-  result: Pick<FlowResult<any>, 'status' | 'stepResults'>,
+  result: Pick<FlowResult, 'status' | 'stepResults'>,
   convertedResult: ConvertedFlowResult,
   failedStepIds: string[]
 ): string {
@@ -1232,7 +1232,8 @@ async function renderGeneratedExample(
 
   for (const rendered of demoRenders) {
     const markerId = replaceKeyToMarkerId(demoBase(flow.id, rendered.demo.id))
-    const runInput = rendered.demo.ctx === undefined ? rendered.demo.init : { data: rendered.demo.init, ctx: rendered.demo.ctx }
+    const runInput =
+      rendered.demo.ctx === undefined ? rendered.demo.init : { data: rendered.demo.init, ctx: rendered.demo.ctx }
     const parts = renderDemoResultParts(
       markerId,
       runInput,
@@ -1246,13 +1247,7 @@ async function renderGeneratedExample(
         templatePlaceholderToken(demoFullTablePlaceholder(flow.id, rendered.demo.id)),
         wrapWithAnchor(
           anchorForDemoPart(formatter, flow, rendered.demo, 'full-table'),
-          renderDemoResultSection(
-            markerId,
-            runInput,
-            rendered.result,
-            rendered.convertedResult,
-            rendered.failedStepIds
-          )
+          renderDemoResultSection(markerId, runInput, rendered.result, rendered.convertedResult, rendered.failedStepIds)
         )
       )
     }
@@ -1297,7 +1292,8 @@ async function renderAllDemoRenders(
       flows.map(async (flow) => {
         const demoRenders = await Promise.all(
           (flow.demos ?? []).map(async (demo) => {
-            const result = demo.ctx === undefined ? await flow.flow.run(demo.init) : await flow.flow.run(demo.init, demo.ctx)
+            const result =
+              demo.ctx === undefined ? await flow.flow.run(demo.init) : await flow.flow.run(demo.init, demo.ctx)
             const failedStepIds = collectFailedStepIds(result.stepResults)
             return {
               demo,
