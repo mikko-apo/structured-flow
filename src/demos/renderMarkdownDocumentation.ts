@@ -1,9 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
-import { collectFailedStepIds, convertResultNode } from '../resultUtils.ts'
-import { getOwnEntries } from '../utils.ts'
-import { renderProcessAsMermaidGraph } from '../mermaidRenderer.ts'
-import { type FlowResult, type FlowStepInfo, StepBranchInfo } from '../flowClasses.ts'
+import { collectFailedStepIds, convertResultNode, type FlowResult, renderProcessAsMermaidGraph } from '../index.ts'
 
 type GeneratedBlockKind = 'json' | 'mermaid' | 'html-table'
 type ConvertedStepResult = {
@@ -32,6 +29,14 @@ type FlowLike = {
   asyncMode: 'sync' | 'async'
   allowsContext: boolean
   run(...args: [data: object] | [data: object, ctx: unknown]): Promise<FlowResult> | FlowResult
+}
+
+type FlowStepInfo = {
+  id: string
+  options?: {
+    description?: string
+  }
+  branches?: Record<PropertyKey, FlowLike>
 }
 
 type DocumentationDemo<InitialCtx extends object> = {
@@ -661,8 +666,22 @@ function renderTableStepLabel(
   ].join('')
 }
 
+function getOwnEntries<T extends Record<PropertyKey, unknown>>(
+  value: T
+): Array<[Extract<keyof T, PropertyKey>, T[Extract<keyof T, PropertyKey>]]> {
+  return (
+    Reflect.ownKeys(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key)) as Array<
+      Extract<keyof T, PropertyKey>
+    >
+  ).map((key) => [key, value[key]])
+}
+
+function hasBranchFlows(step: FlowStepInfo): step is FlowStepInfo & { branches: Record<PropertyKey, FlowLike> } {
+  return step.branches != null
+}
+
 function getBranchEntries(step: FlowStepInfo): Array<[PropertyKey, FlowLike]> {
-  if (!(step instanceof StepBranchInfo)) {
+  if (!hasBranchFlows(step)) {
     return []
   }
 
@@ -830,7 +849,7 @@ function collectNestedFlows(flows: readonly DocumentationFlow<any>[]): LeafFlowE
       visited.add(currentFlow)
 
       for (const step of currentFlow.steps) {
-        for (const branchFlow of Object.values(step instanceof StepBranchInfo ? step.branches : {}) as FlowLike[]) {
+        for (const [, branchFlow] of getBranchEntries(step)) {
           pending.push(branchFlow)
 
           if (rootFlows.has(branchFlow)) {
