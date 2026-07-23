@@ -6,7 +6,7 @@ import { createAsyncFlow, createSyncFlow, error, skip } from '../index'
 describe('renderProcessAsMermaidGraph', () => {
   it('renders a static graph from a flow definition', () => {
     const flow = createSyncFlow<{ route: 'approve' | 'reject' }>().branch(
-      ({ route }) => route,
+      ({ data: { route } }) => route,
       {
         approve: createSyncFlow('APP-1', (_data, _params) => ({ approved: true }), {
           description: 'Approve request',
@@ -28,7 +28,7 @@ describe('renderProcessAsMermaidGraph', () => {
     const approveKey = Symbol('approve')
     const rejectKey = Symbol('reject')
     const flow = createSyncFlow<{ route: 'approve' | 'reject' }>().branch(
-      ({ route }) => (route === 'approve' ? approveKey : rejectKey),
+      ({ data: { route } }) => (route === 'approve' ? approveKey : rejectKey),
       {
         [approveKey]: createSyncFlow('APP-SYMBOL', (_data, _params) => ({ approved: true }), {
           description: 'Approve symbol request',
@@ -50,7 +50,7 @@ describe('renderProcessAsMermaidGraph', () => {
 
   it('does not duplicate edges between sequential branch child steps', () => {
     const flow = createSyncFlow<{ route: 'approve' }>().branch(
-      ({ route }) => route,
+      ({ data: { route } }) => route,
       {
         approve: createSyncFlow<{ route: 'approve' }>()
           .step('APP-1', (_data, _params) => ({ first: true }), { description: 'First child step' })
@@ -69,7 +69,7 @@ describe('renderProcessAsMermaidGraph', () => {
     const approveKey = Symbol('approve')
     const rejectKey = Symbol('reject')
     const flow = createSyncFlow<{ route: 'approve' | 'reject' }>().branch(
-      ({ route }) => (route === 'approve' ? approveKey : rejectKey),
+      ({ data: { route } }) => (route === 'approve' ? approveKey : rejectKey),
       {
         [approveKey]: createSyncFlow('APP-SYMBOL-RUN', (_data, _params) => ({ approved: true }), {
           description: 'Approve symbol request',
@@ -93,7 +93,7 @@ describe('renderProcessAsMermaidGraph', () => {
 
   it('renders selected branch keys even when the selected child branch is skipped', () => {
     const flow = createSyncFlow<{ route: 'approve' | 'reject' }>().branch(
-      ({ route }) => route,
+      ({ data: { route } }) => route,
       {
         approve: createSyncFlow('APP-SKIP', (_data, _params) => skip(), { description: 'Approve but skip' }),
         reject: createSyncFlow('REJ-SKIP', (_data, _params) => ({ rejected: true }), {
@@ -121,7 +121,7 @@ describe('renderProcessAsMermaidGraph', () => {
     )
 
     const flow = createAsyncFlow<{ checks: Array<'audit' | 'rules'> }>().branch(
-      ({ checks }) => checks,
+      ({ data: { checks } }) => checks,
       {
         audit: createAsyncFlow('AUDIT-1', async (_data, _params) => ({ audited: true }), { description: 'Audit' }),
         rules: rulesFlow,

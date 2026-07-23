@@ -11,6 +11,12 @@ import {
   rule as defineRule,
   StepResult,
   stop,
+  type RawStepFnResult,
+  type BranchInfoType,
+  type StepMap,
+  type StepInfoType,
+  type StepResultMap,
+  type StepResultMapInput,
 } from '../index'
 
 type PersonData = {
@@ -223,35 +229,39 @@ describe('structuredFlow core execution', () => {
     expect(flow.steps).toMatchObject([{ id: 'OVERRIDE-1', options: { description: 'Rule option override' } }])
     expect(convertResultNode(result)).toMatchObject({
       status: 'ok',
-      stepResults: [{ id: 'OVERRIDE-1', description: 'Rule option override', status: 'ok', variables: { seen: 'p1b' } }],
+      stepResults: [
+        { id: 'OVERRIDE-1', description: 'Rule option override', status: 'ok', variables: { seen: 'p1b' } },
+      ],
     })
   })
 
-  it('lets map override the step callback signature with fnInput', () => {
-    type FlowMap = (params: { id: string; data: PersonData; ctx: undefined }) => {
-      submissionId: string
-      fnInput: [{ personId: string; route: PersonData['route'] }, { ctx: undefined; submissionId: string }]
+  it('lets map override the step callback data and ctx', () => {
+    type FlowMap = (params: {
+      stepInfo: { rawId: unknown }
+      processingState: { index: number }
+      data: PersonData
+      ctx: undefined
+    }) => {
+      data: { personId: string; route: PersonData['route'] }
+      ctx: { submissionId: string }
     }
 
     const flow = createSyncFlow<string, PersonData, FlowMap>({
-      map: ({ data }) => ({
-        submissionId: data.person.id,
-        fnInput: [
-          { personId: data.person.id, route: data.route },
-          { ctx: undefined, submissionId: data.person.id },
-        ],
+      map: ({ data, processingState }) => ({
+        data: { personId: data.person.id, route: data.route },
+        ctx: { submissionId: `${data.person.id}:${processingState.index}` },
       }),
     }).step(
       'FNINPUT-1',
       (data, params) => {
         expectTypeOf(data).toEqualTypeOf<{ personId: string; route: PersonData['route'] }>()
-        expectTypeOf(params).toEqualTypeOf<{ ctx: undefined; submissionId: string }>()
+        expectTypeOf(params).toEqualTypeOf<{ ctx: { submissionId: string } }>()
 
         return {
-          seen: `${data.personId}:${data.route}:${params.submissionId}`,
+          seen: `${data.personId}:${data.route}:${params.ctx.submissionId}`,
         }
       },
-      { description: 'Use fnInput override' }
+      { description: 'Use mapped callback data and ctx' }
     )
 
     const result = flow.run({
@@ -262,8 +272,150 @@ describe('structuredFlow core execution', () => {
 
     expect(convertResultNode(result)).toMatchObject({
       status: 'ok',
-      stepResults: [{ id: 'FNINPUT-1', variables: { seen: 'p1c:approve:p1c' } }],
+      stepResults: [{ id: 'FNINPUT-1', variables: { seen: 'p1c:approve:p1c:0' } }],
     })
+
+    // @ts-expect-error the retained flow map only accepts the original undefined ctx
+    createSyncFlow<string, PersonData, FlowMap>({ map: flow.map! }).withContext<{ actorId: string }>()
+  })
+
+  it('types step map and mapResult in runtime execution order', () => {
+    type Id = 'STEP-MAP-RESULT-1'
+    type StateStepInfo = StepInfoType<string> | BranchInfoType<unknown>
+    type MappedStepData = { personId: string }
+    type MappedStepCtx = { traceId: string }
+    type StepFn = (data: MappedStepData, params: { ctx: MappedStepCtx }) => { accepted: boolean }
+    type StepMapper = StepMap<
+      Id,
+      PersonData,
+      undefined,
+      MappedStepData,
+      MappedStepCtx,
+      PersonData,
+      undefined,
+      StateStepInfo
+    >
+    type StepResultMapper = StepResultMap<
+      Id,
+      MappedStepData,
+      MappedStepCtx,
+      ReturnType<StepFn> | undefined,
+      (ReturnType<StepFn> & { mapped: true }) | undefined,
+      PersonData,
+      undefined,
+      StateStepInfo
+    >
+
+    const map: StepMapper = ({ stepInfo, processingState, data, ctx }) => {
+      expectTypeOf(stepInfo.rawId).toEqualTypeOf<Id>()
+      expectTypeOf(processingState.data).toEqualTypeOf<PersonData>()
+      expectTypeOf(processingState.ctx).toEqualTypeOf<undefined>()
+      expectTypeOf(data).toEqualTypeOf<PersonData>()
+      expectTypeOf(ctx).toEqualTypeOf<undefined>()
+
+      return {
+        data: { personId: data.person.id },
+        ctx: { traceId: data.person.id },
+      }
+    }
+    const mapResult: StepResultMapper = ({ stepInfo, processingState, data, ctx, result }) => {
+      expectTypeOf(stepInfo.rawId).toEqualTypeOf<Id>()
+      expectTypeOf(processingState.data).toEqualTypeOf<PersonData>()
+      expectTypeOf(processingState.ctx).toEqualTypeOf<undefined>()
+      expectTypeOf(data).toEqualTypeOf<MappedStepData>()
+      expectTypeOf(ctx).toEqualTypeOf<MappedStepCtx>()
+      expectTypeOf(result).toEqualTypeOf<ReturnType<StepFn> | undefined>()
+
+      return result == null ? result : { ...result, mapped: true }
+    }
+    const options = { map, mapResult }
+    const stepFn: StepFn = (data, params) => {
+      expectTypeOf(data).toEqualTypeOf<MappedStepData>()
+      expectTypeOf(params).toEqualTypeOf<{ ctx: MappedStepCtx }>()
+
+      return { accepted: data.personId === params.ctx.traceId }
+    }
+
+    const flow = createSyncFlow<PersonData>().step<Id, typeof options, StepFn>('STEP-MAP-RESULT-1', stepFn, options)
+
+    const result = flow.run({
+      person: { id: 'typed', name: 'Typed', age: 30 },
+      route: 'approve',
+      checks: [],
+    })
+
+    expect(convertResultNode(result)).toMatchObject({
+      stepResults: [{ variables: { accepted: true, mapped: true } }],
+    })
+  })
+
+  it('maps raw step results before normalization and lets step options override the flow mapper', () => {
+    type FlowResultMap = (params: {
+      stepInfo: { rawId: string }
+      processingState: { index: number }
+      data: PersonData
+      ctx: undefined
+      result: RawStepFnResult | undefined
+    }) => RawStepFnResult | undefined
+    type ExpectedResultInput = StepResultMapInput<
+      'MAP-RESULT-1',
+      PersonData,
+      undefined,
+      false | { passed: boolean } | undefined,
+      PersonData,
+      undefined,
+      unknown
+    >
+    expectTypeOf<ExpectedResultInput>().toExtend<Parameters<FlowResultMap>[0]>()
+
+    const flow = createSyncFlow<string, PersonData, undefined, FlowResultMap>({
+      mapResult: ({ data, result }) => {
+        if (result === false) {
+          return { status: 'error', source: `flow:${data.route}` }
+        }
+
+        return result
+      },
+    })
+      .step('MAP-RESULT-1', ({ route }, _params) => (route === 'reject' ? false : { passed: true }), {
+        mapResult: ({ result }: { result: RawStepFnResult | undefined }) => {
+          const source =
+            result != null && !(result instanceof StepResult) && typeof result === 'object' && 'source' in result
+              ? result.source
+              : undefined
+
+          return typeof source === 'string' &&
+            source.startsWith('flow:') &&
+            result != null &&
+            typeof result === 'object'
+            ? { ...result, status: 'ok' as const, source: `step:${source}` }
+            : result
+        },
+      })
+      .step('MAP-RESULT-2', () => false)
+
+    const result = flow.run({
+      person: { id: 'p1d', name: 'Ada', age: 31 },
+      route: 'reject',
+      checks: [],
+    })
+
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'error',
+      stepResults: [
+        { id: 'MAP-RESULT-1', status: 'ok', variables: { source: 'step:flow:reject' } },
+        { id: 'MAP-RESULT-2', status: 'error', variables: { source: 'flow:reject' } },
+      ],
+    })
+  })
+
+  it('rejects incompatible mapResult inputs at the step boundary', () => {
+    createSyncFlow<PersonData>().step('INVALID-RESULT-MAP', () => ({ accepted: true }), {
+      // @ts-expect-error mapResult must accept the actual raw step function result
+      mapResult: ({ result }: { result: false | undefined }) => result,
+    })
+
+    expect(true).toBe(true)
   })
 
   it('parses status, stores the remaining payload on the step result, and supports result remapping', () => {

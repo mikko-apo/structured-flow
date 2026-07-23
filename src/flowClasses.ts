@@ -10,18 +10,130 @@ export type StepOptionsStatusHandling = {
   exception?: 'error'
 }
 
-export type AnyStepMap = (params: {
-  id: unknown
-  data: object
-  ctx: unknown
-  stepOptions?: StepOptions | BranchOptions
-  params?: object
-}) => object & { fnInput?: readonly [object, object] }
+export type StepInfoType<RawId = unknown> = {
+  id: string
+  rawId: RawId
+  options?: StepOptions
+}
+
+export type BranchInfoType<RawId = unknown> = {
+  id: string | undefined
+  rawId: RawId
+  options?: BranchOptions
+}
+
+export type ProcessingState<
+  Data extends object = object,
+  Ctx = unknown,
+  StateStepInfo = unknown,
+  StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
+> = {
+  flow: StateFlow
+  index: number
+  stepResults: StepResult[]
+  data: Data
+  ctx: Ctx
+  branchKey?: PropertyKey
+}
+
+export type MapResult<Data extends object = object, Ctx = unknown> = {
+  data: Data
+  ctx: Ctx
+}
+
+export type RawStepFnResult = StepFnResult | boolean | object
+
+export type InvocationInput<
+  Info,
+  Data extends object = object,
+  Ctx = unknown,
+  StateData extends object = Data,
+  StateCtx = Ctx,
+  StateStepInfo = Info,
+  StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
+> = {
+  stepInfo: Info
+  processingState: ProcessingState<StateData, StateCtx, StateStepInfo, StateFlow>
+  data: Data
+  ctx: Ctx
+}
+
+export type StepMapInput<
+  RawId = unknown,
+  Data extends object = object,
+  Ctx = unknown,
+  StateData extends object = Data,
+  StateCtx = Ctx,
+  StateStepInfo = StepInfoType<RawId>,
+  StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
+> = InvocationInput<StepInfoType<RawId>, Data, Ctx, StateData, StateCtx, StateStepInfo, StateFlow>
+
+export type StepResultMapInput<
+  RawId = unknown,
+  Data extends object = object,
+  Ctx = unknown,
+  Result = RawStepFnResult | undefined,
+  StateData extends object = Data,
+  StateCtx = Ctx,
+  StateStepInfo = StepInfoType<RawId>,
+  StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
+> = StepMapInput<RawId, Data, Ctx, StateData, StateCtx, StateStepInfo, StateFlow> & {
+  result: Result
+}
+
+export type BranchSelectInput<
+  RawId = unknown,
+  Data extends object = object,
+  Ctx = unknown,
+  StateData extends object = Data,
+  StateCtx = Ctx,
+  StateStepInfo = BranchInfoType<RawId>,
+  StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
+> = InvocationInput<BranchInfoType<RawId>, Data, Ctx, StateData, StateCtx, StateStepInfo, StateFlow>
+
+export type InvocationMap<
+  Info,
+  Data extends object = object,
+  Ctx = unknown,
+  MappedData extends object = object,
+  MappedCtx = unknown,
+  StateData extends object = Data,
+  StateCtx = Ctx,
+  StateStepInfo = Info,
+  StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
+> = (
+  input: InvocationInput<Info, Data, Ctx, StateData, StateCtx, StateStepInfo, StateFlow>
+) => MapResult<MappedData, MappedCtx>
+
+export type StepMap<
+  RawId = unknown,
+  Data extends object = object,
+  Ctx = unknown,
+  MappedData extends object = object,
+  MappedCtx = unknown,
+  StateData extends object = Data,
+  StateCtx = Ctx,
+  StateStepInfo = StepInfoType<RawId>,
+  StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
+> = InvocationMap<StepInfoType<RawId>, Data, Ctx, MappedData, MappedCtx, StateData, StateCtx, StateStepInfo, StateFlow>
+
+export type StepResultMap<
+  RawId = unknown,
+  Data extends object = object,
+  Ctx = unknown,
+  Result = RawStepFnResult | undefined,
+  MappedResult extends RawStepFnResult | undefined = RawStepFnResult | undefined,
+  StateData extends object = Data,
+  StateCtx = Ctx,
+  StateStepInfo = StepInfoType<RawId>,
+  StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
+> = (input: StepResultMapInput<RawId, Data, Ctx, Result, StateData, StateCtx, StateStepInfo, StateFlow>) => MappedResult
 
 export type StepOptions = {
   description?: string
   status?: StepOptionsStatusHandling
   map?: unknown
+  mapResult?: unknown
 }
 
 export type StepFnResultRuleId = string | { id: string; description?: string }
@@ -32,7 +144,6 @@ export type BranchOptions = {
   description?: string
   path?: string
   status?: StepOptionsStatusHandling
-  map?: unknown
 }
 
 export type StepFnResultOptions = {
@@ -109,7 +220,16 @@ export class Rule<
   readonly path?: string
 }
 
-type BranchSelectFnReturnValue = PropertyKey | readonly PropertyKey[] | StepStatus
+export type BranchSelectResult<Key extends PropertyKey = PropertyKey, Data extends object = object, Ctx = unknown> =
+  | Key
+  | readonly Key[]
+  | StepStatus
+  | StepFnResult
+  | {
+      keys?: Key | readonly Key[]
+      data?: Data
+      ctx?: Ctx
+    }
 
 export class StepInfo {
   constructor(
@@ -126,15 +246,16 @@ export type FlowLike = {
   allowsContext: boolean
   name?: string
   description?: string
-  map?: AnyStepMap
-  run(...args: [data: object] | [data: object, ctx: unknown]): MaybePromise<FlowResult>
+  map?: InvocationMap<any, any, any, any, any, any, any, any, any>
+  mapResult?: StepResultMap<any, any, any, any, any, any, any, any, any>
+  run(...args: any[]): MaybePromise<FlowResult>
 }
 
 export class StepBranchInfo {
   constructor(
     readonly id: string | undefined,
     readonly rawId: unknown,
-    readonly select: (data: object, params: object) => BranchSelectFnReturnValue,
+    readonly select: (input: BranchSelectInput) => BranchSelectResult,
     readonly branches: Record<PropertyKey, FlowLike>,
     readonly options?: BranchOptions
   ) {}

@@ -36,15 +36,14 @@ type MapFlowData = {
   summary?: string
 }
 
-type MapFlowMapper = (params: { id: string; data: MapFlowData; ctx: undefined }) => {
-  submissionId: string
-  occupancyCount: number
-  requiresManualReview: boolean
-  summary?: string
-  fnInput: [
-    { submissionId: string; occupancyCount: number; summary?: string },
-    { ctx: undefined; submissionId: string; occupancyCount: number; requiresManualReview: boolean; summary?: string },
-  ]
+type MapFlowMapper = (params: {
+  stepInfo: { rawId: unknown }
+  processingState: { index: number }
+  data: MapFlowData
+  ctx: undefined
+}) => {
+  data: { submissionId: string; occupancyCount: number; summary?: string }
+  ctx: { submissionId: string; occupancyCount: number; requiresManualReview: boolean; summary?: string }
 }
 
 function meta(id: string, description: string) {
@@ -137,7 +136,7 @@ const householdFlow = createSyncFlow<CoreApiData>()
     { name: 'main person checks', description: 'Run all main person checks', path: 'mainPerson' }
   )
   .branch(
-    ({ children }, _params) => (children.length > 0 ? 'children' : 'noChildren'),
+    ({ data: { children } }) => (children.length > 0 ? 'children' : 'noChildren'),
     {
       children: childrenFlow,
       noChildren: noChildrenFlow,
@@ -182,44 +181,37 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
 /* MAP_FLOW:START */
 const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
   name: 'Mapped Review Flow',
-  description: 'Demonstrates flow-level map() params augmentation and fnInput overrides.',
+  description: 'Demonstrates flow-level map() overrides for callback data and ctx.',
   map: ({ data }) => ({
-    submissionId: data.form.id,
-    occupancyCount: data.form.occupantCount,
-    requiresManualReview: data.form.requiresManualReview,
-    summary: data.summary,
-    fnInput: [
-      {
-        submissionId: data.form.id,
-        occupancyCount: data.form.occupantCount,
-        summary: data.summary,
-      },
-      {
-        ctx: undefined,
-        submissionId: data.form.id,
-        occupancyCount: data.form.occupantCount,
-        requiresManualReview: data.form.requiresManualReview,
-        summary: data.summary,
-      },
-    ],
+    data: {
+      submissionId: data.form.id,
+      occupancyCount: data.form.occupantCount,
+      summary: data.summary,
+    },
+    ctx: {
+      submissionId: data.form.id,
+      occupancyCount: data.form.occupantCount,
+      requiresManualReview: data.form.requiresManualReview,
+      summary: data.summary,
+    },
   }),
 })
   .step(
     'MAP-10',
     (data, params) => ({
       summary: `${data.submissionId}:${data.occupancyCount}`,
-      reviewTarget: params.submissionId,
+      reviewTarget: params.ctx.submissionId,
     }),
-    { description: 'Use fnInput to override the callback signature' }
+    { description: 'Use mapped callback data and ctx' }
   )
   .step(
     'MAP-20',
     (data, params) =>
-      params.requiresManualReview
+      params.ctx.requiresManualReview
         ? error({ variables: { info: `Escalate ${data.summary ?? 'missing-summary'}` } })
         : { info: `Auto-approve ${data.summary ?? 'missing-summary'}` },
     {
-      description: 'Use the same fnInput override after step output has updated the flow data',
+      description: 'Use the same mapped callback data and ctx after step output has updated the flow data',
     }
   )
 /* MAP_FLOW:END */
@@ -230,7 +222,7 @@ const reviewFlow = createSyncFlow<ReviewData>()
     valid: form.id.length > 0,
   }))
   .branch(
-    ({ form }, _params) => (form.requiresManualReview ? 'manual' : 'auto'),
+    ({ data: { form } }) => (form.requiresManualReview ? 'manual' : 'auto'),
     {
       auto: createSyncFlow<ReviewData>().step(meta('AUTO-1', 'Auto approve'), ({ checks }, _params) => ({
         checksSeen: checks.length,
@@ -313,7 +305,7 @@ export async function writeStructuredProcessExampleMarkdown(
       {
         id: 'MAP_FLOW',
         title: 'Mapped payload flow',
-        description: 'Flow using flow-level map() to augment params and override callback inputs with fnInput.',
+        description: 'Flow using flow-level map() to override callback data and ctx.',
         flow: mappedReviewFlow,
         demos: [
           {
