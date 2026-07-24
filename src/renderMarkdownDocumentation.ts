@@ -1,41 +1,23 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
+import type { FlowResult } from './flowClasses.ts'
+import { renderProcessAsMermaidGraph } from './renderMermaid.ts'
 import {
   convertResultNode,
+  type ConvertedBranchStepFlowResult,
+  type ConvertedFlowResult,
+  type ConvertedStepResult,
   type FlattenedFailedStepResult,
-  flattenFailedStepResults,
-  type FlowResult,
-  renderProcessAsMermaidGraph,
-} from '../index.ts'
+  flattenStepResults,
+} from './resultUtils.ts'
 
 type GeneratedBlockKind = 'json' | 'mermaid' | 'html-table'
-type ConvertedStepResult = {
-  id?: string
-  ruleId?: string
-  name?: string
-  description?: string
-  status: 'ok' | 'skip' | 'stop' | 'error' | 'exception'
-  originalStatus?: 'ok' | 'skip' | 'stop' | 'error' | 'exception'
-  variables?: Record<string, unknown>
-  selectedBranchKeys?: PropertyKey[]
-  branches?: ConvertedBranchStepFlowResult[]
-}
 
-type ConvertedBranchStepFlowResult = {
-  key: PropertyKey
-  status: ConvertedStepResult['status']
-  stepResults: ConvertedStepResult[]
-}
-
-type ConvertedFlowResult = {
-  status: ConvertedStepResult['status']
-  stepResults: ConvertedStepResult[]
-}
-
-type FlowLike = {
+type FlowStructure = {
   steps: readonly FlowStepInfo[]
-  asyncMode: 'sync' | 'async'
-  allowsContext: boolean
+}
+
+type FlowLike = FlowStructure & {
   run(...args: [data: object] | [data: object, ctx: unknown]): Promise<FlowResult> | FlowResult
 }
 
@@ -46,10 +28,10 @@ type FlowStepInfo = {
     name?: string
     description?: string
   }
-  branches?: Record<PropertyKey, FlowLike>
+  branches?: Record<PropertyKey, FlowStructure>
 }
 
-type DocumentationDemo<InitialCtx extends object> = {
+export type DocumentationDemo<InitialCtx extends object> = {
   id: string
   init: InitialCtx
   ctx?: unknown
@@ -57,7 +39,7 @@ type DocumentationDemo<InitialCtx extends object> = {
   description?: string
 }
 
-type DocumentationFlow<InitialCtx extends object> = {
+export type DocumentationFlow<InitialCtx extends object> = {
   id: string
   sourceFile?: string
   flow: FlowLike
@@ -110,17 +92,17 @@ type ParagraphSection = {
   text: string
 }
 
-type DocumentationSection<TFlows extends readonly AnyDocumentationFlow[]> =
+export type DocumentationSection<TFlows extends readonly AnyDocumentationFlow[]> =
   | SectionMarker<TFlows>
   | HeadingSection
   | ParagraphSection
 
-type DocumentationFormatter<TNode extends FlowStepInfo = FlowStepInfo> = (
+export type DocumentationFormatter<TNode extends FlowStepInfo = FlowStepInfo> = (
   node: TNode,
   flowId: string
 ) => FormattedStepItem
 
-type RenderMarkdownDocumentationOptions<
+export type RenderMarkdownDocumentationOptions<
   TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
 > = {
   template: string
@@ -150,7 +132,7 @@ type WriteMarkdownDocumentationPageContentOptions<
   printReport?: boolean
 }
 
-type WriteMarkdownDocumentationOptions<
+export type WriteMarkdownDocumentationOptions<
   TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
 > = WriteMarkdownDocumentationTemplateOptions<TFlows> | WriteMarkdownDocumentationPageContentOptions<TFlows>
 
@@ -366,15 +348,15 @@ function renderOutcomeBadge(result: { status: string; stepResults: Array<{ statu
         ? 'completed early'
         : finalResult.status === 'exception'
           ? 'stopped by exception'
-          : result.status === 'error'
-            ? 'completed with errors'
+          : result.status === 'fail'
+            ? 'completed with failures'
             : result.status === 'ok'
               ? 'successful sequence run'
               : 'done'
 
   const badgeType =
-    result.status === 'exception' || result.status === 'error'
-      ? 'error'
+    result.status === 'exception' || result.status === 'fail'
+      ? 'fail'
       : result.status === 'stop'
         ? 'stop'
         : result.status === 'skip'
@@ -457,7 +439,7 @@ function renderResultTable(
           .join('')
 
   const failedStepResultsHtml = [
-    '<p><strong>flattenFailedStepResults()</strong></p>',
+    '<p><strong>flattenStepResults()</strong></p>',
     '<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">',
     '<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>',
     `<tbody>${failedStepRows}</tbody>`,
@@ -843,7 +825,7 @@ function renderDemoResultParts(
       '<p><strong>Resulting JSON</strong></p>',
       renderJsonCodeBlock(`${markerId}-result`, {
         ...convertedResult,
-        flattenFailedStepResults: failedStepResults,
+        flattenStepResults: failedStepResults,
       }),
     ].join('\n'),
     resultMermaid: renderMermaidBlock(markerId, renderProcessAsMermaidGraph(result)),
@@ -1389,7 +1371,7 @@ async function renderAllDemoRenders(
           (flow.demos ?? []).map(async (demo) => {
             const result =
               demo.ctx === undefined ? await flow.flow.run(demo.init) : await flow.flow.run(demo.init, demo.ctx)
-            const failedStepResults = flattenFailedStepResults(result.stepResults)
+            const failedStepResults = flattenStepResults<FlattenedFailedStepResult>(result.stepResults)
             return {
               demo,
               result,
@@ -1405,7 +1387,7 @@ async function renderAllDemoRenders(
   )
 }
 
-async function renderMarkdownDocumentation<const TFlows extends readonly AnyDocumentationFlow[]>({
+export async function renderMarkdownDocumentation<const TFlows extends readonly AnyDocumentationFlow[]>({
   template,
   sourceFile,
   formatter,

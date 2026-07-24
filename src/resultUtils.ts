@@ -1,10 +1,11 @@
 import type { StepFnResultRuleId, StepStatus } from './flowClasses.ts'
 import { BranchStepFlowResult, FlowResult, StepBranchInfo, StepFnResult, StepResult } from './flowClasses.ts'
+import { getRuleId } from './utils.ts'
 
 type ResultNode = FlowResult | StepResult | BranchStepFlowResult
-type ResultConverter = (value: ResultNode) => any
+type ResultConverter = (value: ResultNode) => unknown
 
-type ConvertedStepResult = {
+export type ConvertedStepResult = {
   id?: string
   ruleId?: string
   name?: string
@@ -19,48 +20,19 @@ type ConvertedStepResult = {
   branches?: ConvertedBranchStepFlowResult[]
 }
 
-type ConvertedBranchStepFlowResult = {
+type ConvertedResultWithSteps = {
+  status: StepStatus
+  stepResults: ConvertedStepResult[]
+}
+
+export type ConvertedBranchStepFlowResult = ConvertedResultWithSteps & {
   key: PropertyKey
-  status: StepStatus
-  stepResults: ConvertedStepResult[]
 }
 
-type ConvertedFlowResult = {
-  status: StepStatus
-  stepResults: ConvertedStepResult[]
-}
+export type ConvertedFlowResult = ConvertedResultWithSteps
 
-type ResultTreeStep = {
-  stepInfo: { id?: string; options?: { description?: string } }
-  status: StepStatus
-  path?: string
-  message?: string
-  variables?: Record<string, unknown>
-  results?: StepFnResult[]
-  branches?: ResultTreeBranch[]
-}
-
-type ResultTreeBranch = {
-  stepResults: ResultTreeStep[]
-}
-
-function visitResultTree(
-  stepResults: readonly ResultTreeStep[],
-  visit: (stepResult: ResultTreeStep, path: string | undefined) => void,
-  parentPath?: string
-): void {
-  for (const stepResult of stepResults) {
-    const path = joinPath(parentPath, stepResult.path)
-    visit(stepResult, path)
-
-    for (const branch of stepResult.branches ?? []) {
-      visitResultTree(branch.stepResults, visit, path)
-    }
-  }
-}
-
-export type FlattenedFailedStepResult = {
-  id: string
+export type FlattenedStepResult = {
+  id?: string
   status: StepStatus
   description?: string
   path?: string
@@ -68,11 +40,19 @@ export type FlattenedFailedStepResult = {
   variables: Record<string, unknown>
 }
 
-type FlattenedStepMetadata = {
+export type FlattenedFailedStepResult = FlattenedStepResult & {
   id: string
-  status: StepStatus
-  description?: string
 }
+
+export type FlattenStepResultParams = {
+  failed: boolean
+  flattenedResult: FlattenedStepResult
+  stepResult: StepResult | StepFnResult
+}
+
+export type FlattenStepResultFn<Item> = (params: FlattenStepResultParams) => Item | undefined
+
+type FlattenedStepMetadata = Pick<FlattenedStepResult, 'id' | 'status' | 'description'>
 
 function metadataFromRuleId(
   ruleId: StepFnResultRuleId | undefined,
@@ -108,78 +88,73 @@ function joinPath(parentPath: string | undefined, path: string | undefined): str
   return `${parentPath}.${path}`
 }
 
-function flattenStepFnResults(
-  results: readonly StepFnResult[] | undefined,
-  parentPath: string | undefined,
-  includeAll: boolean,
-  metadata: FlattenedStepMetadata,
-  flattenedResults: FlattenedFailedStepResult[]
+function visitResultTree(
+  results: readonly (StepResult | StepFnResult)[],
+  visit: (params: FlattenStepResultParams) => void,
+  parentPath?: string,
+  parentFailed = false,
+  parentMetadata?: FlattenedStepMetadata
 ): void {
-  for (const result of results ?? []) {
+  for (const result of results) {
+    const isFlowStep = result instanceof StepResult
     const path = joinPath(parentPath, result.path)
-    const shouldInclude = includeAll || result.status === 'error' || result.status === 'exception'
-    const resultMetadata = {
-      ...metadataFromRuleId(result.ruleId, metadata),
-      status: result.status,
-    }
+    const failed = (!isFlowStep && parentFailed) || result.status === 'fail' || result.status === 'exception'
+    const flowStepId =
+      isFlowStep && (!(result.stepInfo instanceof StepBranchInfo) || result.stepInfo.rawId !== undefined)
+        ? result.stepInfo.id
+        : undefined
+    const metadata: FlattenedStepMetadata = isFlowStep
+      ? {
+          ...(flowStepId === undefined ? {} : { id: flowStepId }),
+          status: result.status,
+          ...(result.stepInfo.options?.description === undefined
+            ? {}
+            : { description: result.stepInfo.options.description }),
+        }
+      : {
+          ...metadataFromRuleId(result.ruleId, parentMetadata ?? { status: result.status }),
+          status: result.status,
+        }
 
-    if (shouldInclude) {
-      flattenedResults.push({
-        ...resultMetadata,
+    visit({
+      failed,
+      flattenedResult: {
+        ...metadata,
         ...(path === undefined ? {} : { path }),
         ...(result.message === undefined ? {} : { message: result.message }),
-        variables: result.variables,
-      })
+        variables: result.variables ?? {},
+      },
+      stepResult: result,
+    })
+
+    if (result.results !== undefined) {
+      visitResultTree(result.results, visit, path, failed, metadata)
     }
 
-    flattenStepFnResults(result.results, path, shouldInclude, resultMetadata, flattenedResults)
+    if (isFlowStep) {
+      for (const branch of result.branches ?? []) {
+        visitResultTree(branch.stepResults, visit, path)
+      }
+    }
   }
 }
 
-export function flattenFailedStepResults(
-  stepResults: ReadonlyArray<{
-    stepInfo: { id?: string; options?: { description?: string } }
-    status: StepStatus
-    path?: string
-    message?: string
-    variables?: Record<string, unknown>
-    results?: StepFnResult[]
-    branches?: Array<{ stepResults: any[] }>
-  }>
-): FlattenedFailedStepResult[] {
-  const flattenedResults: FlattenedFailedStepResult[] = []
+function failedStepResult({ failed, flattenedResult }: FlattenStepResultParams): FlattenedFailedStepResult | undefined {
+  return failed && flattenedResult.id !== undefined ? { ...flattenedResult, id: flattenedResult.id } : undefined
+}
 
-  visitResultTree(stepResults, (stepResult, path) => {
-    const isFailed = stepResult.status === 'error' || stepResult.status === 'exception'
-    const hasFailureIdentity = !isBranchStepInfo(stepResult.stepInfo) || stepResult.stepInfo.rawId !== undefined
+export function flattenStepResults<FlattenedResult>(
+  stepResults: readonly StepResult[],
+  fn: FlattenStepResultFn<FlattenedResult> = failedStepResult as FlattenStepResultFn<FlattenedResult>
+): FlattenedResult[] {
+  const flattenedResults: FlattenedResult[] = []
 
-    const failureId = stepResult.stepInfo.id
-    if (isFailed && hasFailureIdentity && failureId !== undefined) {
-      flattenedResults.push({
-        id: failureId,
-        status: stepResult.status,
-        ...(stepResult.stepInfo.options?.description === undefined
-          ? {}
-          : { description: stepResult.stepInfo.options.description }),
-        ...(path === undefined ? {} : { path }),
-        ...(stepResult.message === undefined ? {} : { message: stepResult.message }),
-        variables: stepResult.variables ?? {},
-      })
+  visitResultTree(stepResults, (params) => {
+    const item = fn(params)
+
+    if (item !== undefined) {
+      flattenedResults.push(item)
     }
-
-    flattenStepFnResults(
-      stepResult.results,
-      path,
-      isFailed,
-      {
-        id: stepResult.stepInfo.id ?? '',
-        status: stepResult.status,
-        ...(stepResult.stepInfo.options?.description === undefined
-          ? {}
-          : { description: stepResult.stepInfo.options.description }),
-      },
-      flattenedResults
-    )
   })
 
   return flattenedResults
@@ -189,46 +164,21 @@ function isObjectLike(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function isBranchStepInfo(value: unknown): value is StepBranchInfo {
-  return value instanceof StepBranchInfo
-}
-
-function formatRuleId(ruleId: unknown): string | undefined {
-  if (typeof ruleId === 'string') {
-    return ruleId
-  }
-
-  return ruleId != null && typeof ruleId === 'object' && 'id' in ruleId && typeof ruleId.id === 'string'
-    ? ruleId.id
-    : undefined
-}
-
 function defaultResultConverter(
   value: ResultNode
 ): ConvertedFlowResult | ConvertedStepResult | ConvertedBranchStepFlowResult {
-  if (value instanceof FlowResult) {
-    return {
-      status: value.status,
-      stepResults: [],
-    }
+  if (value instanceof FlowResult || value instanceof BranchStepFlowResult) {
+    const converted = { status: value.status, stepResults: [] }
+    return value instanceof BranchStepFlowResult ? { key: value.key, ...converted } : converted
   }
 
-  if (value instanceof BranchStepFlowResult) {
-    return {
-      key: value.key,
-      status: value.status,
-      stepResults: [],
-    }
-  }
+  const branchInfo = value.stepInfo instanceof StepBranchInfo ? value.stepInfo : undefined
+  const ruleId = getRuleId(branchInfo?.rawId)
 
   return {
     ...(value.stepInfo.id === undefined ? {} : { id: value.stepInfo.id }),
-    ...(isBranchStepInfo(value.stepInfo) && formatRuleId(value.stepInfo.rawId) !== undefined
-      ? { ruleId: formatRuleId(value.stepInfo.rawId) }
-      : {}),
-    ...(isBranchStepInfo(value.stepInfo) && value.stepInfo.options?.name !== undefined
-      ? { name: value.stepInfo.options.name }
-      : {}),
+    ...(ruleId === undefined ? {} : { ruleId }),
+    ...(branchInfo?.options?.name === undefined ? {} : { name: branchInfo.options.name }),
     ...(value.stepInfo.options?.description === undefined ? {} : { description: value.stepInfo.options.description }),
     status: value.status,
     ...(value.originalStatus === undefined ? {} : { originalStatus: value.originalStatus }),
@@ -248,14 +198,7 @@ export function convertResultNode(value: ResultNode, converter: ResultConverter 
     return convertedValue
   }
 
-  if (value instanceof FlowResult) {
-    return {
-      ...convertedValue,
-      stepResults: value.stepResults.map((stepResult) => convertResultNode(stepResult, converter)),
-    }
-  }
-
-  if (value instanceof BranchStepFlowResult) {
+  if (value instanceof FlowResult || value instanceof BranchStepFlowResult) {
     return {
       ...convertedValue,
       stepResults: value.stepResults.map((stepResult) => convertResultNode(stepResult, converter)),

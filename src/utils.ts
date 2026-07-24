@@ -8,6 +8,16 @@ export function getOwnEntries<T extends Record<PropertyKey, unknown>>(
   ).map((key) => [key, value[key]])
 }
 
-export function isPromise<T>(value: object): value is Promise<T> {
+export function isPromise<T>(value: unknown): value is Promise<T> {
   return value != null && typeof value === 'object' && 'then' in value && typeof value.then === 'function'
+}
+
+export function getRuleId(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  return value != null && typeof value === 'object' && 'id' in value && typeof value.id === 'string'
+    ? value.id
+    : undefined
 }

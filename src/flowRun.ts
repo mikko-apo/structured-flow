@@ -1,29 +1,28 @@
 import { getOwnEntries, isPromise } from './utils.ts'
 import {
-  type BranchSelectResult,
+  type BranchInitResult,
   BranchStepFlowResult,
   FlowResult,
   type FlowLike,
   type FlowStepInfo,
   type InvocationInput as SharedInvocationInput,
   type InvocationMap,
-  type RawStepFnResult,
   type ProcessingState,
+  type RawStepFnResult,
+  StepBranchInfo,
+  StepFnResult,
+  StepInfo,
+  type StepOptionsStatusHandling,
+  StepResult,
   type StepResultMap,
   type StepResultMapInput,
-  type StepOptionsStatusHandling,
-  StepFnResult,
-  StepBranchInfo,
-  StepInfo,
-  StepResult,
   type StepStatus,
   stepStatuses,
 } from './flowClasses.ts'
 
-type RuntimeFlow = Pick<FlowLike, 'steps' | 'map' | 'mapResult'>
-
-type RuntimeStepMap = InvocationMap<any, any, any, any, any, any, any, any, any>
-type RuntimeStepResultMap = StepResultMap<any, any, any, any, any, any, any, any, any>
+type RuntimeFlow = Pick<FlowLike, 'steps' | 'options'>
+type RuntimeStepInit = InvocationMap<any, any, any, any, any, any, any, any, any, true>
+type RuntimeStepResultMap = StepResultMap<any, any, any, any, any, any, any, any, any, true>
 
 type RuntimeProcessingState = ProcessingState<object, unknown, FlowStepInfo, RuntimeFlow> & {
   pendingBranch?: {
@@ -36,15 +35,9 @@ type RuntimeProcessingState = ProcessingState<object, unknown, FlowStepInfo, Run
   }
 }
 
-type InvocationInput = SharedInvocationInput<
-  FlowStepInfo,
-  object,
-  unknown,
-  object,
-  unknown,
-  FlowStepInfo,
-  RuntimeFlow
-> & { processingState: RuntimeProcessingState }
+type InvocationInput = Omit<SharedInvocationInput<FlowStepInfo, object, unknown>, 'processingState'> & {
+  processingState: RuntimeProcessingState
+}
 
 type RuntimeStepResultMapInput = StepResultMapInput<
   unknown,
@@ -57,12 +50,23 @@ type RuntimeStepResultMapInput = StepResultMapInput<
   RuntimeFlow
 > & { stepInfo: StepInfo; processingState: RuntimeProcessingState }
 
+type CallbackRequest = {
+  invoke: () => unknown
+  syncError: string
+}
+
+type TravelGenerator<Result = void> = Generator<CallbackRequest, Result, unknown>
+
 const branchStatusPrecedence: Record<StepStatus, number> = {
   ok: 0,
   skip: 1,
   stop: 2,
-  error: 3,
+  fail: 3,
   exception: 4,
+}
+
+function* call<Result>(invoke: () => Result, syncError: string): TravelGenerator<Awaited<Result>> {
+  return (yield { invoke, syncError }) as Awaited<Result>
 }
 
 function isStepStatus(value: unknown): value is StepStatus {
@@ -70,18 +74,18 @@ function isStepStatus(value: unknown): value is StepStatus {
 }
 
 function applyStatusHandling(status: StepStatus, options?: StepOptionsStatusHandling) {
-  if (status === 'error') {
-    if (options?.error === 'ignore') {
+  if (status === 'fail') {
+    if (options?.fail === 'ignore') {
       return 'ok'
     }
 
-    if (options?.error === 'exception') {
+    if (options?.fail === 'exception') {
       return 'exception'
     }
   }
 
-  if (status === 'exception' && options?.exception === 'error') {
-    return 'error'
+  if (status === 'exception' && options?.exception === 'fail') {
+    return 'fail'
   }
 
   return status
@@ -97,33 +101,58 @@ function mergeStepStatuses(results: readonly StepStatus[]) {
   )
 }
 
-type BranchSelection = {
-  kind: 'keys'
-  keys: readonly PropertyKey[]
-  data: object
-  ctx: unknown
-}
+function normalizeStepFnResult(result: RawStepFnResult | undefined, trueIsFail = false) {
+  if (result instanceof StepFnResult) {
+    return {
+      status: result.status,
+      payload: result.variables as Record<string, unknown>,
+      path: result.path,
+      message: result.message,
+      results: result.results,
+    }
+  }
 
-type BranchSelectionStatus = {
-  kind: 'status'
-  normalized: ReturnType<typeof normalizeStepFnResult>
-  data: object
-  ctx: unknown
-}
+  if (result === true) {
+    return { status: (trueIsFail ? 'fail' : 'ok') as StepStatus, payload: {} }
+  }
 
-function assertValidBranchKey(stepLabel: string, key: PropertyKey, branches: Record<PropertyKey, FlowLike>) {
-  if (!(key in branches)) {
-    throw new Error(`Flow branch "${stepLabel}" selected unknown flow key "${String(key)}"`)
+  if (result === false) {
+    return { status: (trueIsFail ? 'ok' : 'fail') as StepStatus, payload: {} }
+  }
+
+  const resultLike = (result ?? {}) as { status?: StepStatus } & Record<string, unknown>
+  return {
+    status: resultLike.status ?? 'ok',
+    payload: Object.fromEntries(Object.entries(resultLike).filter(([key]) => key !== 'status')) as Record<
+      string,
+      unknown
+    >,
   }
 }
+
+type BranchSelection =
+  | {
+      kind: 'keys'
+      keys: readonly PropertyKey[]
+      data: object
+      ctx: unknown
+      hasContext: boolean
+    }
+  | {
+      kind: 'status'
+      normalized: ReturnType<typeof normalizeStepFnResult>
+      data: object
+      ctx: unknown
+    }
 
 function normalizeBranchSelection(
   stepLabel: string,
   branches: Record<PropertyKey, FlowLike>,
-  selection: BranchSelectResult<PropertyKey>,
+  selection: BranchInitResult<PropertyKey>,
   data: object,
-  ctx: unknown
-): BranchSelection | BranchSelectionStatus {
+  ctx: unknown,
+  hasInputContext: boolean
+): BranchSelection {
   if (selection instanceof StepFnResult) {
     return { kind: 'status', normalized: normalizeStepFnResult(selection), data, ctx }
   }
@@ -133,7 +162,7 @@ function normalizeBranchSelection(
       throw new Error(`Flow branch "${stepLabel}" selected no flow keys; return a step result instead`)
     }
 
-    return { kind: 'keys', keys: selection, data, ctx }
+    return { kind: 'keys', keys: selection, data, ctx, hasContext: hasInputContext }
   }
 
   if (isStepStatus(selection)) {
@@ -146,27 +175,44 @@ function normalizeBranchSelection(
       data?: object
       ctx?: unknown
     }
+    const nextKeys = selectionLike.keys ?? Reflect.ownKeys(branches)
     const nextData = selectionLike.data ?? data
     const nextCtx = 'ctx' in selectionLike ? selectionLike.ctx : ctx
-    const nextKeys = selectionLike.keys ?? Reflect.ownKeys(branches)
 
     if (Array.isArray(nextKeys)) {
       if (nextKeys.length === 0) {
         throw new Error(`Flow branch "${stepLabel}" selected no flow keys; return a step result instead`)
       }
 
-      return { kind: 'keys', keys: nextKeys, data: nextData, ctx: nextCtx }
+      return {
+        kind: 'keys',
+        keys: nextKeys,
+        data: nextData,
+        ctx: nextCtx,
+        hasContext: 'ctx' in selectionLike || hasInputContext,
+      }
     }
 
-    return { kind: 'keys', keys: [nextKeys as PropertyKey], data: nextData, ctx: nextCtx }
+    return {
+      kind: 'keys',
+      keys: [nextKeys as PropertyKey],
+      data: nextData,
+      ctx: nextCtx,
+      hasContext: 'ctx' in selectionLike || hasInputContext,
+    }
   }
 
-  return { kind: 'keys', keys: [selection as PropertyKey], data, ctx }
+  return {
+    kind: 'keys',
+    keys: [selection as PropertyKey],
+    data,
+    ctx,
+    hasContext: hasInputContext,
+  }
 }
 
 function selectsAllBranches(selectedKeys: readonly PropertyKey[], branches: Record<PropertyKey, FlowLike>) {
   const branchKeys = Reflect.ownKeys(branches)
-
   return (
     branchKeys.length > 0 &&
     selectedKeys.length === branchKeys.length &&
@@ -174,89 +220,62 @@ function selectsAllBranches(selectedKeys: readonly PropertyKey[], branches: Reco
   )
 }
 
-function applyMap(map: RuntimeStepMap | undefined, input: InvocationInput): InvocationInput {
+function* applyMap(
+  map: RuntimeStepInit | undefined,
+  input: InvocationInput,
+  label: string,
+  targetFlow?: RuntimeFlow
+): TravelGenerator<InvocationInput> {
   if (map == null) {
     return input
   }
 
-  const mapped = map(input)
-
+  const mapped = yield* call(() => map(input), `${label} returned a Promise in sync run()`)
+  if (targetFlow?.options.allowContext && !('ctx' in mapped)) {
+    throw new Error(`${label} did not provide context required by its flow`)
+  }
   return { ...input, data: mapped.data, ctx: mapped.ctx }
 }
 
-function resolveInvocation(stepInfo: FlowStepInfo, processingState: RuntimeProcessingState): InvocationInput {
+function* resolveInvocation(
+  stepInfo: FlowStepInfo,
+  processingState: RuntimeProcessingState
+): TravelGenerator<InvocationInput> {
   const baseInvocation: InvocationInput = {
     stepInfo,
     processingState,
     data: processingState.data,
     ctx: processingState.ctx,
   }
+  const flowInvocation = yield* applyMap(processingState.flow.options.step.map, baseInvocation, 'Flow map')
 
-  const flowInvocation = applyMap(processingState.flow.map, baseInvocation)
-
-  if (stepInfo instanceof StepInfo) {
-    return applyMap(stepInfo.options?.map as RuntimeStepMap | undefined, flowInvocation)
-  }
-
-  return flowInvocation
+  return stepInfo instanceof StepInfo
+    ? yield* applyMap(
+        stepInfo.options?.init as RuntimeStepInit | undefined,
+        flowInvocation,
+        `Flow step "${stepInfo.id}" init`,
+        processingState.flow
+      )
+    : flowInvocation
 }
 
-function invokeCallback(fn: (...args: any[]) => any, input: InvocationInput) {
-  return fn(input.data as any, { ctx: input.ctx } as any)
+function* applyResultMap(
+  mapResult: RuntimeStepResultMap | undefined,
+  input: RuntimeStepResultMapInput,
+  label: string
+): TravelGenerator<RawStepFnResult | undefined> {
+  return mapResult == null
+    ? input.result
+    : yield* call(() => mapResult(input), `${label} returned a Promise in sync run()`)
 }
 
-function invokeStepFn(step: StepInfo, input: InvocationInput) {
-  return invokeCallback(step.fn, input)
-}
-
-function invokeBranchSelect(step: StepBranchInfo, input: InvocationInput) {
-  return step.select(input as any)
-}
-
-function normalizeStepFnResult(result: RawStepFnResult | undefined) {
-  if (result instanceof StepFnResult) {
-    return {
-      status: result.status,
-      payload: result.variables as Record<string, unknown>,
-      path: result.path,
-      message: result.message,
-      results: result.results,
-    }
-  }
-
-  if (result === true) {
-    return { status: 'ok' as StepStatus, payload: {} }
-  }
-
-  if (result === false) {
-    return { status: 'error' as StepStatus, payload: {} }
-  }
-
-  const resultLike = (result ?? {}) as { status?: StepStatus } & Record<string, unknown>
-  const rawStatus = resultLike.status ?? 'ok'
-  const payload = Object.fromEntries(Object.entries(resultLike).filter((entry) => entry[0] !== 'status')) as Record<
-    string,
-    unknown
-  >
-
-  return { status: rawStatus, payload }
-}
-
-function applyResultMap(mapResult: RuntimeStepResultMap | undefined, input: RuntimeStepResultMapInput) {
-  if (mapResult == null) {
-    return input.result
-  }
-
-  return mapResult(input)
-}
-
-function createStepResult(
+function* createStepResult(
   stepInfo: StepInfo,
   result: RawStepFnResult | undefined,
   processingState: RuntimeProcessingState,
   data = processingState.data,
   ctx = processingState.ctx
-) {
+): TravelGenerator<StepResult> {
   const resultInput: RuntimeStepResultMapInput = {
     stepInfo,
     processingState,
@@ -264,17 +283,21 @@ function createStepResult(
     ctx,
     result,
   }
-  const flowMappedResult = applyResultMap(processingState.flow.mapResult, {
-    ...resultInput,
-  })
-  const stepMappedResult = applyResultMap(stepInfo.options?.mapResult as RuntimeStepResultMap | undefined, {
-    ...resultInput,
-    result: flowMappedResult,
-  })
-  const normalized = normalizeStepFnResult(stepMappedResult)
-  const rawStatus = normalized.status
-  const status = applyStatusHandling(rawStatus, stepInfo.options?.status)
-  const originalStatus = rawStatus !== status ? rawStatus : undefined
+  const flowMappedResult = yield* applyResultMap(
+    processingState.flow.options.step.mapResult,
+    resultInput,
+    'Flow mapResult'
+  )
+  const stepMappedResult = yield* applyResultMap(
+    stepInfo.options?.mapResult as RuntimeStepResultMap | undefined,
+    { ...resultInput, result: flowMappedResult },
+    `Flow step "${stepInfo.id}" mapResult`
+  )
+  const normalized = normalizeStepFnResult(
+    stepMappedResult,
+    stepInfo.options?.trueIsFail ?? processingState.flow.options.step.trueIsFail
+  )
+  const status = applyStatusHandling(normalized.status, stepInfo.options?.status)
 
   return new StepResult(
     stepInfo,
@@ -282,85 +305,11 @@ function createStepResult(
     Object.keys(normalized.payload).length === 0 ? undefined : normalized.payload,
     undefined,
     undefined,
-    originalStatus,
+    normalized.status === status ? undefined : normalized.status,
     normalized.path,
     normalized.message,
     normalized.results
   )
-}
-
-function createBranchStepResult(
-  step: StepBranchInfo,
-  rawStatus: StepStatus,
-  selectedKeys: PropertyKey[] = [],
-  branchResults: BranchStepFlowResult[] = [],
-  branchState?: Pick<RuntimeProcessingState, 'data' | 'ctx'>,
-  normalized?: ReturnType<typeof normalizeStepFnResult>
-) {
-  const selectedKeySet = new Set(selectedKeys)
-  const selectedEveryBranch = selectsAllBranches(selectedKeys, step.branches)
-  const status = applyStatusHandling(rawStatus, step.options?.status)
-  const originalStatus = rawStatus !== status ? rawStatus : undefined
-  const skippedBranches = getOwnEntries(step.branches)
-    .filter(([key]) => !selectedKeySet.has(key))
-    .map(
-      ([key, flow]) =>
-        new BranchStepFlowResult(
-          key,
-          'skip',
-          flow.steps.map((branchStep: FlowStepInfo) =>
-            createStepResultWithStatus(
-              branchStep,
-              'skip',
-              createProcessingState(flow, branchState?.data ?? {}, branchState?.ctx, key)
-            )
-          )
-        )
-    )
-
-  return new StepResult(
-    step,
-    status,
-    normalized && Object.keys(normalized.payload).length > 0 ? normalized.payload : undefined,
-    selectedKeys.length === 0 || selectedEveryBranch ? undefined : [...selectedKeys],
-    [...branchResults, ...skippedBranches],
-    originalStatus,
-    normalized?.path ?? step.options?.path,
-    normalized?.message,
-    normalized?.results
-  )
-}
-
-function createStepResultWithStatus(
-  step: FlowStepInfo,
-  rawStatus: StepStatus,
-  processingState: RuntimeProcessingState,
-  data = processingState.data,
-  ctx = processingState.ctx
-): StepResult {
-  if (step instanceof StepInfo) {
-    return createStepResult(step, { status: rawStatus } as RawStepFnResult, processingState, data, ctx)
-  }
-
-  return createBranchStepResult(step, rawStatus)
-}
-
-function ensureStepResult(
-  step: StepInfo,
-  result: StepResult | RawStepFnResult | undefined,
-  processingState: RuntimeProcessingState,
-  data = processingState.data,
-  ctx = processingState.ctx
-) {
-  if (result instanceof StepResult) {
-    if (result.stepInfo !== step) {
-      throw new Error(`Flow step "${step.id}" returned a StepResult bound to a different step`)
-    }
-
-    return result
-  }
-
-  return createStepResult(step, result, processingState, data, ctx)
 }
 
 function createProcessingState(
@@ -379,188 +328,263 @@ function createProcessingState(
   }
 }
 
-function skipRemainingSteps(state: RuntimeProcessingState) {
-  for (let index = state.index + 1; index < state.flow.steps.length; index++) {
-    state.stepResults.push(createStepResultWithStatus(state.flow.steps[index], 'skip', state))
-  }
+function* createStepResultWithStatus(
+  step: FlowStepInfo,
+  status: StepStatus,
+  processingState: RuntimeProcessingState,
+  data = processingState.data,
+  ctx = processingState.ctx
+): TravelGenerator<StepResult> {
+  return step instanceof StepInfo
+    ? yield* createStepResult(step, { status } as RawStepFnResult, processingState, data, ctx)
+    : yield* createBranchStepResult(step, status)
 }
 
-function finishStep(state: RuntimeProcessingState, stepResult: StepResult) {
-  state.stepResults.push(stepResult)
+function* createBranchStepResult(
+  step: StepBranchInfo,
+  rawStatus: StepStatus,
+  selectedKeys: PropertyKey[] = [],
+  branchResults: BranchStepFlowResult[] = [],
+  branchState?: Pick<RuntimeProcessingState, 'data' | 'ctx'>,
+  normalized?: ReturnType<typeof normalizeStepFnResult>
+): TravelGenerator<StepResult> {
+  const selectedKeySet = new Set(selectedKeys)
+  const skippedBranches: BranchStepFlowResult[] = []
 
-  if (stepResult.status === 'stop' || stepResult.status === 'exception') {
-    skipRemainingSteps(state)
-    state.index = state.flow.steps.length
+  for (const [key, flow] of getOwnEntries(step.branches)) {
+    if (selectedKeySet.has(key)) {
+      continue
+    }
+
+    const skippedState = createProcessingState(flow, branchState?.data ?? {}, branchState?.ctx, key)
+    const skippedResults: StepResult[] = []
+    for (const branchStep of flow.steps) {
+      skippedResults.push(yield* createStepResultWithStatus(branchStep, 'skip', skippedState))
+    }
+    skippedBranches.push(new BranchStepFlowResult(key, 'skip', skippedResults))
+  }
+
+  const status = applyStatusHandling(rawStatus, step.options?.status)
+  return new StepResult(
+    step,
+    status,
+    normalized && Object.keys(normalized.payload).length > 0 ? normalized.payload : undefined,
+    selectedKeys.length === 0 || selectsAllBranches(selectedKeys, step.branches) ? undefined : [...selectedKeys],
+    [...branchResults, ...skippedBranches],
+    rawStatus === status ? undefined : rawStatus,
+    normalized?.path ?? step.options?.path,
+    normalized?.message,
+    normalized?.results
+  )
+}
+
+function* ensureStepResult(
+  step: StepInfo,
+  result: StepResult | RawStepFnResult | undefined,
+  processingState: RuntimeProcessingState,
+  data: object,
+  ctx: unknown
+): TravelGenerator<StepResult> {
+  if (result instanceof StepResult) {
+    if (result.stepInfo !== step) {
+      throw new Error(`Flow step "${step.id}" returned a StepResult bound to a different step`)
+    }
+
+    return result
+  }
+
+  return yield* createStepResult(step, result, processingState, data, ctx)
+}
+
+function* finishStep(state: RuntimeProcessingState, result: StepResult): TravelGenerator {
+  state.stepResults.push(result)
+
+  if (result.status !== 'stop' && result.status !== 'exception') {
+    state.index++
     return
   }
 
-  state.index++
+  for (let index = state.index + 1; index < state.flow.steps.length; index++) {
+    state.stepResults.push(yield* createStepResultWithStatus(state.flow.steps[index], 'skip', state))
+  }
+  state.index = state.flow.steps.length
 }
 
-function travel(
-  processingStateList: RuntimeProcessingState[]
-):
-  | { kind: 'step'; state: RuntimeProcessingState; step: StepInfo; input: InvocationInput }
-  | { kind: 'done'; result: FlowResult } {
+function assertValidBranchKeys(
+  stepLabel: string,
+  keys: readonly PropertyKey[],
+  branches: Record<PropertyKey, FlowLike>
+) {
+  for (const key of keys) {
+    if (!(key in branches)) {
+      throw new Error(`Flow branch "${stepLabel}" selected unknown flow key "${String(key)}"`)
+    }
+  }
+}
+
+function* processBranch(state: RuntimeProcessingState, step: StepBranchInfo, input: InvocationInput): TravelGenerator {
+  const stepLabel = step.options?.name ?? step.id ?? 'branch'
+  const selected = yield* call(
+    () => step.init(input as any),
+    `Flow branch "${stepLabel}" returned a Promise in sync run()`
+  )
+  const selection = normalizeBranchSelection(
+    stepLabel,
+    step.branches,
+    selected,
+    input.data,
+    input.ctx,
+    state.flow.options.allowContext || input.ctx !== undefined
+  )
+
+  if (selection.kind === 'status') {
+    yield* finishStep(
+      state,
+      yield* createBranchStepResult(
+        step,
+        selection.normalized.status,
+        [],
+        [],
+        { data: selection.data, ctx: selection.ctx },
+        selection.normalized
+      )
+    )
+    return
+  }
+
+  assertValidBranchKeys(stepLabel, selection.keys, step.branches)
+  for (const key of selection.keys) {
+    if (step.branches[key].options.allowContext && !selection.hasContext) {
+      throw new Error(`Flow branch "${stepLabel}" init did not provide context required by "${String(key)}"`)
+    }
+  }
+  state.pendingBranch = {
+    step,
+    selectedKeys: [...selection.keys],
+    nextBranchIndex: 0,
+    branchResults: [],
+    data: selection.data,
+    ctx: selection.ctx,
+  }
+}
+
+function* processStep(state: RuntimeProcessingState, step: StepInfo, input: InvocationInput): TravelGenerator {
+  const rawResult = yield* call(
+    () => step.fn(input.data as any, { ctx: input.ctx } as any),
+    `Flow step "${step.id}" returned a Promise in sync run()`
+  )
+  const result = yield* ensureStepResult(step, rawResult, state, input.data, input.ctx)
+  yield* finishStep(state, result)
+}
+
+function* finishPendingBranch(state: RuntimeProcessingState): TravelGenerator {
+  const pending = state.pendingBranch!
+  yield* finishStep(
+    state,
+    yield* createBranchStepResult(
+      pending.step,
+      mergeStepStatuses(pending.branchResults.map(({ status }) => status)),
+      pending.selectedKeys,
+      pending.branchResults,
+      { data: pending.data, ctx: pending.ctx }
+    )
+  )
+  state.pendingBranch = undefined
+}
+
+function finishChildBranch(processingStates: RuntimeProcessingState[], finishedState: RuntimeProcessingState) {
+  const parentState = processingStates[processingStates.length - 1]
+  parentState.pendingBranch?.branchResults.push(
+    new BranchStepFlowResult(
+      finishedState.branchKey!,
+      mergeStepStatuses(finishedState.stepResults.map(({ status }) => status)),
+      finishedState.stepResults
+    )
+  )
+}
+
+function* travel(flow: RuntimeFlow, data: object, ctx: unknown): TravelGenerator<FlowResult> {
+  const processingStates = [createProcessingState(flow, data, ctx)]
+
   while (true) {
-    const state = processingStateList[processingStateList.length - 1]
+    const state = processingStates[processingStates.length - 1]
 
     if (state.pendingBranch != null) {
       if (state.pendingBranch.nextBranchIndex < state.pendingBranch.selectedKeys.length) {
         const key = state.pendingBranch.selectedKeys[state.pendingBranch.nextBranchIndex++]
-        const branchFlow = state.pendingBranch.step.branches[key]
-        processingStateList.push(
-          createProcessingState(branchFlow, state.pendingBranch.data, state.pendingBranch.ctx, key)
+        processingStates.push(
+          createProcessingState(
+            state.pendingBranch.step.branches[key],
+            state.pendingBranch.data,
+            state.pendingBranch.ctx,
+            key
+          )
         )
-        continue
+      } else {
+        yield* finishPendingBranch(state)
       }
-
-      finishStep(
-        state,
-        createBranchStepResult(
-          state.pendingBranch.step,
-          mergeStepStatuses(state.pendingBranch.branchResults.map((entry) => entry.status)),
-          state.pendingBranch.selectedKeys,
-          state.pendingBranch.branchResults,
-          {
-            data: state.pendingBranch.data,
-            ctx: state.pendingBranch.ctx,
-          }
-        )
-      )
-      state.pendingBranch = undefined
       continue
     }
 
     if (state.index >= state.flow.steps.length) {
-      if (processingStateList.length === 1) {
-        return {
-          kind: 'done',
-          result: new FlowResult(state.stepResults, mergeStepStatuses(state.stepResults.map((entry) => entry.status))),
-        }
+      if (processingStates.length === 1) {
+        return new FlowResult(state.stepResults, mergeStepStatuses(state.stepResults.map(({ status }) => status)))
       }
 
-      const finishedState = processingStateList.pop()!
-      const parentState = processingStateList[processingStateList.length - 1]
-      parentState.pendingBranch?.branchResults.push(
-        new BranchStepFlowResult(
-          finishedState.branchKey!,
-          mergeStepStatuses(finishedState.stepResults.map((entry) => entry.status)),
-          finishedState.stepResults
-        )
-      )
+      finishChildBranch(processingStates, processingStates.pop()!)
       continue
     }
 
     const step = state.flow.steps[state.index]
-    const input = resolveInvocation(step, state)
-
-    if (step instanceof StepBranchInfo) {
-      try {
-        const stepLabel = step.options?.name ?? step.id ?? 'branch'
-        const selection = normalizeBranchSelection(
-          stepLabel,
-          step.branches,
-          invokeBranchSelect(step, input),
-          input.data,
-          input.ctx
-        )
-
-        if (selection.kind === 'status') {
-          finishStep(
-            state,
-            createBranchStepResult(
-              step,
-              selection.normalized.status,
-              [],
-              [],
-              {
-                data: selection.data,
-                ctx: selection.ctx,
-              },
-              selection.normalized
-            )
-          )
-          continue
-        }
-
-        for (const key of selection.keys) {
-          assertValidBranchKey(stepLabel, key, step.branches)
-        }
-
-        state.pendingBranch = {
-          step,
-          selectedKeys: [...selection.keys],
-          nextBranchIndex: 0,
-          branchResults: [],
-          data: selection.data,
-          ctx: selection.ctx,
-        }
-      } catch {
-        finishStep(state, createStepResultWithStatus(step, 'exception', state))
+    let input: InvocationInput | undefined
+    try {
+      input = yield* resolveInvocation(step, state)
+      if (step instanceof StepBranchInfo) {
+        yield* processBranch(state, step, input)
+      } else {
+        yield* processStep(state, step, input)
       }
-
-      continue
+    } catch {
+      yield* finishStep(state, yield* createStepResultWithStatus(step, 'exception', state, input?.data, input?.ctx))
     }
-
-    return { kind: 'step', state, step, input }
   }
 }
 
 export function syncRun(flow: RuntimeFlow, data: object, ctx: unknown): FlowResult {
-  const processingStateList: RuntimeProcessingState[] = [createProcessingState(flow, data, ctx)]
+  const iterator = travel(flow, data, ctx)
+  let current = iterator.next()
 
-  while (true) {
-    const current = travel(processingStateList)
-    if (current.kind === 'done') {
-      return current.result
-    }
-
+  while (!current.done) {
+    const request = current.value
+    let result: unknown
     try {
-      const result = invokeStepFn(current.step, current.input)
-
-      if (isPromise(result)) {
-        throw new Error(`Flow step "${current.step.id}" returned a Promise in sync run()`)
-      }
-
-      finishStep(
-        current.state,
-        ensureStepResult(current.step, result, current.state, current.input.data, current.input.ctx)
-      )
-    } catch {
-      finishStep(
-        current.state,
-        createStepResultWithStatus(current.step, 'exception', current.state, current.input.data, current.input.ctx)
-      )
+      result = request.invoke()
+    } catch (error) {
+      current = iterator.throw(error)
+      continue
     }
+
+    current = isPromise(result) ? iterator.throw(new Error(request.syncError)) : iterator.next(result)
   }
+
+  return current.value
 }
 
 export async function asyncRun(flow: RuntimeFlow, data: object, ctx: unknown): Promise<FlowResult> {
-  const processingStateList: RuntimeProcessingState[] = [createProcessingState(flow, data, ctx)]
+  const iterator = travel(flow, data, ctx)
+  let current = iterator.next()
 
-  while (true) {
-    const current = travel(processingStateList)
-    if (current.kind === 'done') {
-      return current.result
-    }
-
+  while (!current.done) {
+    let result: unknown
     try {
-      finishStep(
-        current.state,
-        ensureStepResult(
-          current.step,
-          await invokeStepFn(current.step, current.input),
-          current.state,
-          current.input.data,
-          current.input.ctx
-        )
-      )
-    } catch {
-      finishStep(
-        current.state,
-        createStepResultWithStatus(current.step, 'exception', current.state, current.input.data, current.input.ctx)
-      )
+      result = await current.value.invoke()
+    } catch (error) {
+      current = iterator.throw(error)
+      continue
     }
+
+    current = iterator.next(result)
   }
+
+  return current.value
 }

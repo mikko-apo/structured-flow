@@ -1,13 +1,14 @@
 export type MaybePromise<T> = T | Promise<T>
-type AsyncMode = 'sync' | 'async'
+type SyncValue<T> = T extends object ? T & { then?: never } : T
+type MaybePromiseInMode<Async extends boolean, T> = Async extends true ? MaybePromise<T> : SyncValue<T>
 
-export const stepStatuses = ['ok', 'skip', 'stop', 'error', 'exception'] as const
+export const stepStatuses = ['ok', 'skip', 'stop', 'fail', 'exception'] as const
 
 export type StepStatus = (typeof stepStatuses)[number]
 
 export type StepOptionsStatusHandling = {
-  error?: 'ignore' | 'exception'
-  exception?: 'error'
+  fail?: 'ignore' | 'exception'
+  exception?: 'fail'
 }
 
 export type StepInfoType<RawId = unknown> = {
@@ -58,7 +59,7 @@ export type InvocationInput<
   ctx: Ctx
 }
 
-export type StepMapInput<
+export type StepInitInput<
   RawId = unknown,
   Data extends object = object,
   Ctx = unknown,
@@ -77,11 +78,11 @@ export type StepResultMapInput<
   StateCtx = Ctx,
   StateStepInfo = StepInfoType<RawId>,
   StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
-> = StepMapInput<RawId, Data, Ctx, StateData, StateCtx, StateStepInfo, StateFlow> & {
+> = StepInitInput<RawId, Data, Ctx, StateData, StateCtx, StateStepInfo, StateFlow> & {
   result: Result
 }
 
-export type BranchSelectInput<
+export type BranchInitInput<
   RawId = unknown,
   Data extends object = object,
   Ctx = unknown,
@@ -101,11 +102,12 @@ export type InvocationMap<
   StateCtx = Ctx,
   StateStepInfo = Info,
   StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
+  Async extends boolean = false,
 > = (
   input: InvocationInput<Info, Data, Ctx, StateData, StateCtx, StateStepInfo, StateFlow>
-) => MapResult<MappedData, MappedCtx>
+) => MaybePromiseInMode<Async, MapResult<MappedData, MappedCtx>>
 
-export type StepMap<
+export type StepInit<
   RawId = unknown,
   Data extends object = object,
   Ctx = unknown,
@@ -115,7 +117,19 @@ export type StepMap<
   StateCtx = Ctx,
   StateStepInfo = StepInfoType<RawId>,
   StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
-> = InvocationMap<StepInfoType<RawId>, Data, Ctx, MappedData, MappedCtx, StateData, StateCtx, StateStepInfo, StateFlow>
+  Async extends boolean = false,
+> = InvocationMap<
+  StepInfoType<RawId>,
+  Data,
+  Ctx,
+  MappedData,
+  MappedCtx,
+  StateData,
+  StateCtx,
+  StateStepInfo,
+  StateFlow,
+  Async
+>
 
 export type StepResultMap<
   RawId = unknown,
@@ -127,18 +141,42 @@ export type StepResultMap<
   StateCtx = Ctx,
   StateStepInfo = StepInfoType<RawId>,
   StateFlow extends { steps: readonly StateStepInfo[] } = { steps: readonly StateStepInfo[] },
-> = (input: StepResultMapInput<RawId, Data, Ctx, Result, StateData, StateCtx, StateStepInfo, StateFlow>) => MappedResult
+  Async extends boolean = false,
+> = (
+  input: StepResultMapInput<RawId, Data, Ctx, Result, StateData, StateCtx, StateStepInfo, StateFlow>
+) => MaybePromiseInMode<Async, MappedResult>
 
-export type StepOptions = {
+type InitOption<Init> = unknown extends Init
+  ? { init?: Init }
+  : [Init] extends [undefined]
+    ? { init?: undefined }
+    : { init: Init }
+
+export type StepOptions<Init = unknown, ResultMapper = unknown> = {
   description?: string
   status?: StepOptionsStatusHandling
-  map?: unknown
-  mapResult?: unknown
+  trueIsFail?: boolean
+  mapResult?: ResultMapper
+} & InitOption<Init>
+
+export type StepParams<
+  RuleType,
+  Fn extends (...args: any[]) => any,
+  Init = unknown,
+  ResultMapper = unknown,
+> = StepOptions<Init, ResultMapper> & {
+  rule: RuleType
+  fn: Fn
 }
 
 export type StepFnResultRuleId = string | { id: string; description?: string }
 
-export type BranchOptions = {
+export type BranchOptions<
+  Branches extends Record<PropertyKey, FlowLike> = Record<PropertyKey, FlowLike>,
+  Init = (input: BranchInitInput) => MaybePromise<BranchInitResult>,
+> = {
+  branches: Branches
+  init?: Init
   ruleId?: StepFnResultRuleId
   name?: string
   description?: string
@@ -220,7 +258,26 @@ export class Rule<
   readonly path?: string
 }
 
-export type BranchSelectResult<Key extends PropertyKey = PropertyKey, Data extends object = object, Ctx = unknown> =
+export type FlowResolver = (
+  stepId: string | RuleId<any> | Rule<any, any, any>
+) => string | RuleId<any> | { id: string; description?: string }
+
+export type FlowStepOptions = {
+  readonly resolver?: FlowResolver
+  readonly map?: InvocationMap<any, any, any, any, any, any, any, any, any, true>
+  readonly mapResult?: StepResultMap<any, any, any, any, any, any, any, any, any, true>
+  readonly trueIsFail?: boolean
+}
+
+export type FlowOptions = {
+  readonly syncMode: boolean
+  readonly allowContext: boolean
+  readonly step: FlowStepOptions
+  readonly name?: string
+  readonly description?: string
+}
+
+export type BranchInitResult<Key extends PropertyKey = PropertyKey, Data extends object = object, Ctx = unknown> =
   | Key
   | readonly Key[]
   | StepStatus
@@ -242,12 +299,7 @@ export class StepInfo {
 
 export type FlowLike = {
   steps: readonly FlowStepInfo[]
-  asyncMode: AsyncMode
-  allowsContext: boolean
-  name?: string
-  description?: string
-  map?: InvocationMap<any, any, any, any, any, any, any, any, any>
-  mapResult?: StepResultMap<any, any, any, any, any, any, any, any, any>
+  options: FlowOptions
   run(...args: any[]): MaybePromise<FlowResult>
 }
 
@@ -255,10 +307,14 @@ export class StepBranchInfo {
   constructor(
     readonly id: string | undefined,
     readonly rawId: unknown,
-    readonly select: (input: BranchSelectInput) => BranchSelectResult,
-    readonly branches: Record<PropertyKey, FlowLike>,
-    readonly options?: BranchOptions
-  ) {}
+    readonly options: BranchOptions
+  ) {
+    this.branches = options.branches
+    this.init = options.init ?? (() => Reflect.ownKeys(this.branches))
+  }
+
+  readonly init: (input: BranchInitInput) => MaybePromise<BranchInitResult>
+  readonly branches: Record<PropertyKey, FlowLike>
 }
 
 export type FlowStepInfo = StepInfo | StepBranchInfo

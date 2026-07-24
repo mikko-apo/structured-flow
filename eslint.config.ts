@@ -4,6 +4,13 @@ import { defineConfig } from 'eslint/config'
 
 export default defineConfig([
   {
+    languageOptions: {
+      parserOptions: {
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+  {
     ignores: ['dist/**', 'docs/ki-frame-demo.js', 'src/util/standardSchema.ts'],
   },
   {

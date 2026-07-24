@@ -1,11 +1,9 @@
-import { getOwnEntries } from './utils.ts'
+import { getOwnEntries, getRuleId } from './utils.ts'
 import { type FlowResult, type StepResult, type StepStatus } from './flowClasses.ts'
 
 type MermaidStepResult = StepResult
 type MermaidFlowLike = {
   steps: readonly MermaidFlowStepInfo[]
-  asyncMode: 'sync' | 'async'
-  allowsContext: boolean
 }
 type MermaidFlowStepInfo = {
   id?: string
@@ -24,6 +22,14 @@ type RenderableBranch = {
   steps: readonly MermaidFlowStepInfo[]
   stepResults?: readonly MermaidStepResult[]
 }
+
+const mermaidClassDefinitions = [
+  '  classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px',
+  '  classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px',
+  '  classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px',
+  '  classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px',
+  '  classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2',
+]
 
 function hasStepResults(value: MermaidRenderable): value is Pick<FlowResult, 'status' | 'stepResults'> {
   return 'stepResults' in value
@@ -65,16 +71,6 @@ function getStepDescription(step: MermaidFlowStepInfo): string {
 
 function getStepTitle(step: MermaidFlowStepInfo): string {
   return typeof step.options?.name === 'string' ? step.options.name : (step.id ?? '')
-}
-
-function formatRuleId(ruleId: unknown): string | undefined {
-  if (typeof ruleId === 'string') {
-    return ruleId
-  }
-
-  return ruleId != null && typeof ruleId === 'object' && 'id' in ruleId && typeof ruleId.id === 'string'
-    ? ruleId.id
-    : undefined
 }
 
 function getBranchEntries(step: MermaidFlowStepInfo): Array<[PropertyKey, MermaidFlowLike]> {
@@ -121,7 +117,7 @@ function renderStepLabel(step: MermaidFlowStepInfo, stepResult?: MermaidStepResu
   const description = getStepDescription(step)
   const payload = stepResult == null ? '' : renderStepPayload(stepResult)
   const stepTitle = getStepTitle(step)
-  const ruleId = step.branches == null ? undefined : formatRuleId(step.rawId)
+  const ruleId = step.branches == null ? undefined : getRuleId(step.rawId)
   const title =
     description === ''
       ? `${stepTitle}${ruleId === undefined ? '' : `\nruleId: ${ruleId}`}`
@@ -222,8 +218,8 @@ function renderDoneLabel(status: StepStatus): string {
     return 'Completed Early'
   }
 
-  if (status === 'error') {
-    return 'Completed with Errors'
+  if (status === 'fail') {
+    return 'Completed with Failures'
   }
 
   return 'Done'
@@ -238,11 +234,7 @@ export function renderProcessAsMermaidGraph(value: MermaidRenderable): string {
   if (steps.length === 0) {
     lines.push(`  done([${doneLabel}])`)
     lines.push('  start --> done')
-    lines.push('  classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px')
-    lines.push('  classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px')
-    lines.push('  classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px')
-    lines.push('  classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px')
-    lines.push('  classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2')
+    lines.push(...mermaidClassDefinitions)
     return lines.join('\n')
   }
 
@@ -258,11 +250,7 @@ export function renderProcessAsMermaidGraph(value: MermaidRenderable): string {
 
   lines.push(`  done([${doneLabel}])`)
   lines.push('  start --> step_0')
-  lines.push('  classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px')
-  lines.push('  classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px')
-  lines.push('  classDef complete fill:#f0fdf4,stroke:#15803d,stroke-width:2px')
-  lines.push('  classDef failure fill:#fef2f2,stroke:#dc2626,stroke-width:2px')
-  lines.push('  classDef neutral fill:#f8fafc,stroke:#94a3b8,stroke-dasharray: 4 2')
+  lines.push(...mermaidClassDefinitions)
   lines.push('  classDef join fill:#f8fafc,stroke:#94a3b8,stroke-width:1px,color:#475569')
 
   if (sequenceResult != null) {

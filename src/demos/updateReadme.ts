@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createSyncFlow, error, ruleId, rule } from '../index.ts'
+import { createSyncFlow, fail, ruleId, rule } from '../index.ts'
 import {writeMarkdownDocumentation} from "../renderMarkdownDocumentation.ts";
 
 const documentationSourceFile = fileURLToPath(import.meta.url)
@@ -67,12 +67,12 @@ const PC10verifyPerson = rule(
   ({ person }: CoreApiData) =>
     person.name.trim().length > 0
       ? { personId: person.id, personName: person.name }
-      : error({
+      : fail({
           message: 'Person is invalid.',
           variables: { info: 'Person failed identity checks.' },
         }).addResult(
           ruleId('PC10.name', { description: 'Check person name' }),
-          error({
+          fail({
             path: 'name',
             message: 'Person name is required.',
             variables: { info: 'Person name is required.' },
@@ -92,74 +92,74 @@ const PC20checkChildrenCount = rule(
 
 const personChecks = createSyncFlow<CoreApiData>()
   .step(PC10verifyPerson)
-  .step(
-    'PC11',
-    ({ person }) =>
+  .step({
+    rule: 'PC11',
+    fn: ({ person }) =>
       person.age >= 18
         ? { adult: true }
-        : error({
+        : fail({
             path: 'person.age',
             message: `${person.name} must be an adult.`,
             variables: { info: `${person.name} must be an adult.` },
           }),
-    { description: 'Check person age' }
-  )
+    description: 'Check person age',
+  })
 
 const childrenFlow = createSyncFlow<CoreApiData>()
   .step(PC20checkChildrenCount)
-  .step(
-    'PC21',
-    ({ children }) => ({
+  .step({
+    rule: 'PC21',
+    fn: ({ children }) => ({
       childNames: children.map((child) => child.name),
     }),
-    { description: 'List children' }
-  )
+    description: 'List children',
+  })
 
-const noChildrenFlow = createSyncFlow<CoreApiData>().step(
-  'PC22',
-  ({ children }) =>
+const noChildrenFlow = createSyncFlow<CoreApiData>().step({
+  rule: 'PC22',
+  fn: ({ children }) =>
     children.length === 0
       ? { noChildren: true }
-      : error({
+      : fail({
           path: 'children',
           message: 'Expected no children.',
           variables: { info: 'Expected no children.' },
         }),
-  { description: 'Confirm no children' }
-)
+  description: 'Confirm no children',
+})
 
 const householdFlow = createSyncFlow<CoreApiData>()
-  .branch(
-    {
+  .branch({
+    branches: {
       mainPerson: personChecks,
     },
-    { name: 'main person checks', description: 'Run all main person checks', path: 'mainPerson' }
-  )
-  .branch(
-    ({ data: { children } }) => (children.length > 0 ? 'children' : 'noChildren'),
-    {
+    name: 'main person checks',
+    description: 'Run all main person checks',
+    path: 'mainPerson',
+  })
+  .branch({
+    init: ({ data: { children } }) => (children.length > 0 ? 'children' : 'noChildren'),
+    branches: {
       children: childrenFlow,
       noChildren: noChildrenFlow,
     },
-    {
-      ruleId: ruleId('BR20', { description: 'Route based on whether the person has children' }),
-      name: 'children or no children',
-      description: 'Route based on whether the person has children',
-    }
-  )
+    ruleId: ruleId('BR20', { description: 'Route based on whether the person has children' }),
+    name: 'children or no children',
+    description: 'Route based on whether the person has children',
+  })
 /* CORE_API:END */
 
 /* FLOW_METADATA:START */
 const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
   name: 'Named Review Flow',
   description: 'Demonstrates flow-level name and description metadata.',
-}).step(
-  'META-10',
-  ({ form }, _params) => ({
+}).step({
+  rule: 'META-10',
+  fn: ({ form }, _params) => ({
     reviewTarget: form.id,
   }),
-  { description: 'Record the form id as the review target' }
-)
+  description: 'Record the form id as the review target',
+})
 /* FLOW_METADATA:END */
 
 /* CONTEXT_FLOW:START */
@@ -168,71 +168,79 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
   description: 'Demonstrates withContext() and flow.run(data, ctx).',
 })
   .withContext<ContextFlowCtx>()
-  .step(
-    'CTX-10',
-    ({ form }, params) => ({
+  .step({
+    rule: 'CTX-10',
+    fn: ({ form }, params) => ({
       actorLabel: `${params.ctx.role}:${params.ctx.actorId}`,
       reviewTarget: form.id,
     }),
-    { description: 'Attach actor context to the review' }
-  )
+    description: 'Attach actor context to the review',
+  })
 /* CONTEXT_FLOW:END */
 
 /* MAP_FLOW:START */
 const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
   name: 'Mapped Review Flow',
   description: 'Demonstrates flow-level map() overrides for callback data and ctx.',
-  map: ({ data }) => ({
-    data: {
-      submissionId: data.form.id,
-      occupancyCount: data.form.occupantCount,
-      summary: data.summary,
-    },
-    ctx: {
-      submissionId: data.form.id,
-      occupancyCount: data.form.occupantCount,
-      requiresManualReview: data.form.requiresManualReview,
-      summary: data.summary,
-    },
-  }),
+  step: {
+    map: ({ data }) => ({
+      data: {
+        submissionId: data.form.id,
+        occupancyCount: data.form.occupantCount,
+        summary: data.summary,
+      },
+      ctx: {
+        submissionId: data.form.id,
+        occupancyCount: data.form.occupantCount,
+        requiresManualReview: data.form.requiresManualReview,
+        summary: data.summary,
+      },
+    }),
+  },
 })
-  .step(
-    'MAP-10',
-    (data, params) => ({
+  .step({
+    rule: 'MAP-10',
+    fn: (data, params) => ({
       summary: `${data.submissionId}:${data.occupancyCount}`,
       reviewTarget: params.ctx.submissionId,
     }),
-    { description: 'Use mapped callback data and ctx' }
-  )
-  .step(
-    'MAP-20',
-    (data, params) =>
+    description: 'Use mapped callback data and ctx',
+  })
+  .step({
+    rule: 'MAP-20',
+    fn: (data, params) =>
       params.ctx.requiresManualReview
-        ? error({ variables: { info: `Escalate ${data.summary ?? 'missing-summary'}` } })
+        ? fail({ variables: { info: `Escalate ${data.summary ?? 'missing-summary'}` } })
         : { info: `Auto-approve ${data.summary ?? 'missing-summary'}` },
-    {
-      description: 'Use the same mapped callback data and ctx after step output has updated the flow data',
-    }
-  )
+    description: 'Use the same mapped callback data and ctx after step output has updated the flow data',
+  })
 /* MAP_FLOW:END */
 
 /* RULE_FLOW:START */
 const reviewFlow = createSyncFlow<ReviewData>()
-  .step(meta('VALIDATE-1', 'Validate request'), ({ form }, _params) => ({
-    valid: form.id.length > 0,
-  }))
-  .branch(
-    ({ data: { form } }) => (form.requiresManualReview ? 'manual' : 'auto'),
-    {
-      auto: createSyncFlow<ReviewData>().step(meta('AUTO-1', 'Auto approve'), ({ checks }, _params) => ({
-        checksSeen: checks.length,
-      })),
-      manual: createSyncFlow<ReviewData>().step(meta('MANUAL-1', 'Send to manual review'), ({ form }, _params) =>
-        error({ variables: { info: `Manual review required for ${form.id}.` } })
-      ),
+  .step({
+    rule: meta('VALIDATE-1', 'Validate request'),
+    fn: ({ form }, _params) => ({
+      valid: form.id.length > 0,
+    }),
+  })
+  .branch({
+    init: ({ data: { form } }) => (form.requiresManualReview ? 'manual' : 'auto'),
+    branches: {
+      auto: createSyncFlow<ReviewData>().step({
+        rule: meta('AUTO-1', 'Auto approve'),
+        fn: ({ checks }, _params) => ({
+          checksSeen: checks.length,
+        }),
+      }),
+      manual: createSyncFlow<ReviewData>().step({
+        rule: meta('MANUAL-1', 'Send to manual review'),
+        fn: ({ form }, _params) => fail({ variables: { info: `Manual review required for ${form.id}.` } }),
+      }),
     },
-    { name: 'REVIEW-1', description: 'Route review' }
-  )
+    name: 'REVIEW-1',
+    description: 'Route review',
+  })
 /* RULE_FLOW:END */
 
 export async function writeStructuredProcessExampleMarkdown(

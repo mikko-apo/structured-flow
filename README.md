@@ -10,8 +10,8 @@ Structured flow gives you:
 - A way to define a flow of steps with a human-readable API and descriptions
 - API that enforces correctness and scales to hundreds of rules
 - Ready made tools to visualize and document the flow before and after execution
-  - Mermaid graphs: the flow and flow results
-  - Markdown HTML tables
+    - Mermaid graphs: the flow and flow results
+    - Markdown HTML tables
 - Evidence of processesed rules
 - Full type enforcement: types are enforced for rule functions and flows
 - Promotes splitting the program code in to smaller functions. Instead of a deep nested validation logic, there's small
@@ -47,55 +47,79 @@ Contents:
 createSyncFlow<Data>()
 createAsyncFlow<Data>()
 
-createSyncFlow<Data>({
-  name,
-  description,
-  resolver,
-  map,
-})
+createSyncFlow(ruleOrFlowOptionsOrCombinedBranchOptions)
+createSyncFlow(rule, { ...flowOptions, step: stepOptions })
+createSyncFlow(ruleIdOrString, stepFn, { ...flowOptions, step: stepOptions })
 
-createSyncFlow(stepId, stepFn, stepOptions ?)
-createAsyncFlow(stepId, stepFn, stepOptions ?)
-
-createSyncFlow(select, branches, branchOptions ?)
-createAsyncFlow(select, branches, branchOptions ?)
-
-createSyncFlow(branches, branchOptions ?)
-createAsyncFlow(branches, branchOptions ?)
+createAsyncFlow(ruleOrFlowOptionsOrCombinedBranchOptions)
+createAsyncFlow(rule, { ...flowOptions, step: stepOptions })
+createAsyncFlow(ruleIdOrString, stepFn, { ...flowOptions, step: stepOptions })
 ```
 
 Use the empty generic form when your first `step()` should define the flow. Use the config form when you want flow-level
-metadata, a flow-level `resolver`, or a flow-level `map`. Use the positional forms for short one-step or one-branch
-flows. When a branch is created without a selector, every branch flow runs.
+metadata, a flow-level `step.resolver`, or a flow-level `step.map`. Step factories retain their positional forms. Branches use one
+object containing flow options at the root and branch options under `branch`. The nested `branch` object contains mandatory
+`branches`, optional `init`, and branch options. When a branch is created without `init`, every branch flow runs.
+
+```ts
+flow.branch({ branches, init, name: 'selected branch' })
+createSyncFlow({
+  mapResult,
+  branch: { branches, init, name: 'initial branch' },
+})
+```
+
+In combined factory options, flow metadata and flow-wide `resolver`, `map`, `mapResult`, and `trueIsFail` are root
+properties. Direct step options stay under `step`, and direct branch options stay under `branch`.
 
 ## Flow options
 
 Flow config currently supports:
 
+- `syncMode: boolean`: selected by `createSyncFlow()` or `createAsyncFlow()`
+- `allowContext: boolean`: starts as `false` and becomes `true` after `withContext()`
 - `name?: string`: stored on the flow as metadata
 - `description?: string`: stored on the flow as metadata
-- `resolver?: (stepId) => string | RuleId | { id: string; description?: string }`: maps each `string`, `RuleId`, or
-  `Rule` id to its final recorded metadata
-- `map?: ({ stepInfo, processingState, data, ctx }) => { data, ctx }`: overrides the callback data and callback ctx
-- `mapResult?: ({ stepInfo, processingState, data, ctx, result }) => result`: converts each raw step return before
+- `step?.resolver?: (stepId) => string | RuleId | { id: string; description?: string }`: maps each step id to its final
+  recorded metadata
+- `step?.map?: ({ stepInfo, processingState, data, ctx }) => { data, ctx }`: overrides callback data and context
+- `step?.mapResult?: ({ stepInfo, processingState, data, ctx, result }) => result`: converts each raw step return before
   normalization
+- `step?.trueIsFail?: boolean`: makes boolean validation results use `true → fail` and `false → ok`
 
-`resolver` is metadata-only and is configured on the flow. `step()` and `branch()` do not have resolver options.
-`map` is runtime-only. By default callbacks receive the flow's accumulated `data` object and `{ ctx }`. When a map is
-configured, its returned `{ data, ctx }` becomes the callback signature for that node.
+These flow-wide step defaults are configured under `step`. A direct step can override `trueIsFail` and `mapResult`.
 
 ## Step and branch options
 
 `step()` accepts:
 
 ```ts
+step(rule, options)
+
+step({
+  rule: Rule | RuleId | string
+  fn: (data, params) => object | boolean
+  init ? : ({stepInfo, processingState, data, ctx}) => {
+    data: object
+    ctx: unknown
+  }
+  // other step options
+})
+```
+
+The object form requires `fn`, including when `rule` is a `Rule`; this makes overriding the function explicit.
+
+Step options are:
+
+```ts
 {
   description ? : string
   status ? : {
-    error? : 'ignore' | 'exception'
-    exception? : 'error'
+    fail? : 'ignore' | 'exception'
+    exception? : 'fail'
   }
-  map ? : ({stepInfo, processingState, data, ctx}) => {
+  trueIsFail ? : boolean
+  init ? : ({stepInfo, processingState, data, ctx}) => {
     data: object
     ctx: unknown
   }
@@ -107,35 +131,39 @@ configured, its returned `{ data, ctx }` becomes the callback signature for that
 
 ```ts
 {
+  branches: Record<PropertyKey, Flow>
+  init ? : ({stepInfo, processingState, data, ctx}) => BranchInitResult
   ruleId ? : string | { id: string; description?: string }
   name ? : string
   description ? : string
   path ? : string
   status ? : {
-    error? : 'ignore' | 'exception'
-    exception? : 'error'
+    fail? : 'ignore' | 'exception'
+    exception? : 'fail'
   }
 }
 ```
 
-The flow-level `map` runs before a step-level `map`.
-For `branch()`, `name` is display-only. Set `ruleId` only when the branch wrapper itself should have a public id and be
-included by `flattenFailedStepResults()` when it fails.
+The flow-level `step.map` runs before a direct step `init`. For `branch()`, `name` is display-only. Set `ruleId` only when the
+branch wrapper itself should have a public id and be included by `flattenStepResults()` when it fails.
 
 ## Runtime behavior
 
 - Step callbacks are invoked as `fn(data, params)`
-- Branch selectors are invoked as `select({ stepInfo, processingState, data, ctx })`
-- Without `map`, `params` is `{ ctx }`
-- With `map`, the callback is invoked as `fn(mapped.data, { ctx: mapped.ctx })`
+- Branch initializers are invoked as `init({ stepInfo, processingState, data, ctx })`
+- Without step `init`, `params` is `{ ctx }`
+- With step `init`, the callback is invoked as `fn(initialized.data, { ctx: initialized.ctx })`
 - `withContext<Ctx>()` enables `flow.run(data, ctx)` and types downstream callbacks accordingly
-- Plain object returns record `ok` payloads; use `ok()`, `error()`, `stop()`, `skip()`, or `exception()` for explicit
+- Async flows await step functions, branch initializers, `init`, `map`, and `mapResult`; sync flows only accept synchronous
+  versions of those callbacks
+- Plain object returns record `ok` payloads; use `ok()`, `fail()`, `stop()`, `skip()`, or `exception()` for explicit
   statuses
+- Boolean returns use `true → ok` and `false → fail` by default; `trueIsFail` reverses that interpretation
 
 Status handling:
 
 - `ok` or omitted: continue and merge returned fields into downstream data
-- `error`: record failure and continue
+- `fail`: record failure and continue
 - `stop`: stop execution and mark remaining steps as `skip`
 - `exception`: recorded when a step throws, unless remapped through `status.exception`
 - `skip`: record a skipped result
@@ -146,8 +174,12 @@ Status handling:
 
 - `result.status` is the overall flow status
 - `result.stepResults` contains recorded `StepResult` entries in execution order
-- branch steps include `selectedBranchKeys` only when a selector picks a subset; branches that run every child flow only include nested `branches`
-- helper utilities such as `flattenFailedStepResults()` and `convertResultNode()` can flatten or normalize result
+- branch steps include `selectedBranchKeys` only when a selector picks a subset; branches that run every child flow only
+  include nested `branches`
+- `flattenStepResults()` defaults to failed results; its optional callback receives
+  `{ failed, flattenedResult, stepResult }` and can map or filter every flattened step by returning an item or
+  `undefined`
+- `convertResultNode()` can normalize the result tree
   inspection
 
 # Examples
@@ -175,12 +207,12 @@ const PC10verifyPerson = rule(
   ({ person }: CoreApiData) =>
     person.name.trim().length > 0
       ? { personId: person.id, personName: person.name }
-      : error({
+      : fail({
           message: 'Person is invalid.',
           variables: { info: 'Person failed identity checks.' },
         }).addResult(
           ruleId('PC10.name', { description: 'Check person name' }),
-          error({
+          fail({
             path: 'name',
             message: 'Person name is required.',
             variables: { info: 'Person name is required.' },
@@ -200,61 +232,61 @@ const PC20checkChildrenCount = rule(
 
 const personChecks = createSyncFlow<CoreApiData>()
   .step(PC10verifyPerson)
-  .step(
-    'PC11',
-    ({ person }) =>
+  .step({
+    rule: 'PC11',
+    fn: ({ person }) =>
       person.age >= 18
         ? { adult: true }
-        : error({
+        : fail({
             path: 'person.age',
             message: `${person.name} must be an adult.`,
             variables: { info: `${person.name} must be an adult.` },
           }),
-    { description: 'Check person age' }
-  )
+    description: 'Check person age',
+  })
 
 const childrenFlow = createSyncFlow<CoreApiData>()
   .step(PC20checkChildrenCount)
-  .step(
-    'PC21',
-    ({ children }) => ({
+  .step({
+    rule: 'PC21',
+    fn: ({ children }) => ({
       childNames: children.map((child) => child.name),
     }),
-    { description: 'List children' }
-  )
+    description: 'List children',
+  })
 
-const noChildrenFlow = createSyncFlow<CoreApiData>().step(
-  'PC22',
-  ({ children }) =>
+const noChildrenFlow = createSyncFlow<CoreApiData>().step({
+  rule: 'PC22',
+  fn: ({ children }) =>
     children.length === 0
       ? { noChildren: true }
-      : error({
+      : fail({
           path: 'children',
           message: 'Expected no children.',
           variables: { info: 'Expected no children.' },
         }),
-  { description: 'Confirm no children' }
-)
+  description: 'Confirm no children',
+})
 
 const householdFlow = createSyncFlow<CoreApiData>()
-  .branch(
-    {
+  .branch({
+    branches: {
       mainPerson: personChecks,
     },
-    { name: 'main person checks', description: 'Run all main person checks', path: 'mainPerson' }
-  )
-  .branch(
-    ({ data: { children } }) => (children.length > 0 ? 'children' : 'noChildren'),
-    {
+    name: 'main person checks',
+    description: 'Run all main person checks',
+    path: 'mainPerson',
+  })
+  .branch({
+    init: ({ data: { children } }) => (children.length > 0 ? 'children' : 'noChildren'),
+    branches: {
       children: childrenFlow,
       noChildren: noChildrenFlow,
     },
-    {
-      ruleId: ruleId('BR20', { description: 'Route based on whether the person has children' }),
-      name: 'children or no children',
-      description: 'Route based on whether the person has children',
-    }
-  )
+    ruleId: ruleId('BR20', { description: 'Route based on whether the person has children' }),
+    name: 'children or no children',
+    description: 'Route based on whether the person has children',
+  })
 ```
 
 ### Flow Layout
@@ -480,7 +512,7 @@ end"]
       ]
     }
   ],
-  &quot;flattenFailedStepResults&quot;: []
+  &quot;flattenStepResults&quot;: []
 }</code>
 </pre>
 <!-- structured-process-demo:core-api-no-kids-result:json:end -->
@@ -558,7 +590,7 @@ noChildren=true"]
 <!-- structured-process-demo:core-api-no-kids:mermaid:end -->
 
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span></p>
-<p><strong>flattenFailedStepResults()</strong></p>
+<p><strong>flattenStepResults()</strong></p>
 <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
 <tbody><tr><td colspan="6" style="padding:8px;border-bottom:1px solid #d0d7de;color:#64748b;">No failed step results.</td></tr></tbody>
@@ -728,7 +760,7 @@ noChildren=true"]
       ]
     }
   ],
-  &quot;flattenFailedStepResults&quot;: []
+  &quot;flattenStepResults&quot;: []
 }</code>
 </pre>
 <!-- structured-process-demo:core-api-two-kids-result:json:end -->
@@ -807,7 +839,7 @@ childNames=Lin, Mika"]
 <!-- structured-process-demo:core-api-two-kids:mermaid:end -->
 
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span></p>
-<p><strong>flattenFailedStepResults()</strong></p>
+<p><strong>flattenStepResults()</strong></p>
 <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
 <tbody><tr><td colspan="6" style="padding:8px;border-bottom:1px solid #d0d7de;color:#64748b;">No failed step results.</td></tr></tbody>
@@ -883,29 +915,29 @@ childNames=Lin, Mika"]
 <!-- structured-process-demo:core-api-missing-name-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
-  &quot;status&quot;: &quot;error&quot;,
+  &quot;status&quot;: &quot;fail&quot;,
   &quot;stepResults&quot;: [
     {
       &quot;name&quot;: &quot;main person checks&quot;,
       &quot;description&quot;: &quot;Run all main person checks&quot;,
-      &quot;status&quot;: &quot;error&quot;,
+      &quot;status&quot;: &quot;fail&quot;,
       &quot;path&quot;: &quot;mainPerson&quot;,
       &quot;branches&quot;: [
         {
           &quot;key&quot;: &quot;mainPerson&quot;,
-          &quot;status&quot;: &quot;error&quot;,
+          &quot;status&quot;: &quot;fail&quot;,
           &quot;stepResults&quot;: [
             {
               &quot;id&quot;: &quot;PC10&quot;,
               &quot;description&quot;: &quot;Verify person identity&quot;,
-              &quot;status&quot;: &quot;error&quot;,
+              &quot;status&quot;: &quot;fail&quot;,
               &quot;message&quot;: &quot;Person is invalid.&quot;,
               &quot;variables&quot;: {
                 &quot;info&quot;: &quot;Person failed identity checks.&quot;
               },
               &quot;results&quot;: [
                 {
-                  &quot;status&quot;: &quot;error&quot;,
+                  &quot;status&quot;: &quot;fail&quot;,
                   &quot;ruleId&quot;: {
                     &quot;id&quot;: &quot;PC10.name&quot;,
                     &quot;description&quot;: &quot;Check person name&quot;
@@ -973,10 +1005,10 @@ childNames=Lin, Mika"]
       ]
     }
   ],
-  &quot;flattenFailedStepResults&quot;: [
+  &quot;flattenStepResults&quot;: [
     {
       &quot;id&quot;: &quot;PC10&quot;,
-      &quot;status&quot;: &quot;error&quot;,
+      &quot;status&quot;: &quot;fail&quot;,
       &quot;description&quot;: &quot;Verify person identity&quot;,
       &quot;path&quot;: &quot;mainPerson&quot;,
       &quot;message&quot;: &quot;Person is invalid.&quot;,
@@ -986,7 +1018,7 @@ childNames=Lin, Mika"]
     },
     {
       &quot;id&quot;: &quot;PC10.name&quot;,
-      &quot;status&quot;: &quot;error&quot;,
+      &quot;status&quot;: &quot;fail&quot;,
       &quot;description&quot;: &quot;Check person name&quot;,
       &quot;path&quot;: &quot;mainPerson.name&quot;,
       &quot;message&quot;: &quot;Person name is required.&quot;,
@@ -1007,7 +1039,7 @@ flowchart TD
   start([Start])
   step_0["main person checks: Run all main person checks
 branches: mainPerson
-[error]"]
+[fail]"]
   branch_0_end["main person checks:
 end"]
   branch_0_end --> step_1
@@ -1015,7 +1047,7 @@ end"]
   branch_0_0_start["Branch: mainPerson"]
   step_0 --> branch_0_0_start
   branch_0_0_step_0["PC10: Verify person identity
-[error]
+[fail]
 Person failed identity checks."]
   branch_0_0_start --> branch_0_0_step_0
   branch_0_0_step_0 --> branch_0_0_step_1
@@ -1056,7 +1088,7 @@ noChildren=true"]
   branch_1_1_step_1 --> branch_1_end
   class branch_1_1_step_1 neutral
   class branch_1_1_start neutral
-  done([Completed with Errors])
+  done([Completed with Failures])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
   classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px
@@ -1071,21 +1103,21 @@ noChildren=true"]
 ```
 <!-- structured-process-demo:core-api-missing-name:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span></p>
-<p><strong>flattenFailedStepResults()</strong></p>
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with failures</span></p>
+<p><strong>flattenStepResults()</strong></p>
 <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">mainPerson</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">PC10</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Verify person identity</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Person is invalid.</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Person failed identity checks.&quot;}</td>
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">mainPerson.name</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">PC10.name</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Check person name</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Person name is required.</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Person name is required.&quot;}</td>
@@ -1097,12 +1129,12 @@ noChildren=true"]
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">main person checks</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Run all main person checks</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
-<div><strong>mainPerson</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
+<div><strong>mainPerson</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></div>
 <div style="margin-top:4px;padding-left:12px;">
-<div>PC10: Verify person identity <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
+<div>PC10: Verify person identity <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></div>
 <div style="margin-top:2px;color:#475569;">{&quot;info&quot;:&quot;Person failed identity checks.&quot;}</div>
 
 </div><div style="margin-top:4px;padding-left:12px;">
@@ -1141,21 +1173,21 @@ noChildren=true"]
 
 ## Flow Metadata Example
 
-This flow is created with flow-level `name` and `description`. Those values are stored on the flow and can be used
-by surrounding tooling or documentation.
+This flow is created with flow-level `name` and `description`. Those values are stored on the flow and can be used by
+surrounding tooling or documentation.
 
 <a id="flow-metadata-code-block"></a>
 ```ts
 const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
   name: 'Named Review Flow',
   description: 'Demonstrates flow-level name and description metadata.',
-}).step(
-  'META-10',
-  ({ form }, _params) => ({
+}).step({
+  rule: 'META-10',
+  fn: ({ form }, _params) => ({
     reviewTarget: form.id,
   }),
-  { description: 'Record the form id as the review target' }
-)
+  description: 'Record the form id as the review target',
+})
 ```
 
 ### Flow Layout
@@ -1228,7 +1260,7 @@ flowchart TD
       }
     }
   ],
-  &quot;flattenFailedStepResults&quot;: []
+  &quot;flattenStepResults&quot;: []
 }</code>
 </pre>
 <!-- structured-process-demo:flow-metadata-ok-result:json:end -->
@@ -1258,7 +1290,7 @@ reviewTarget=meta-200"]
 <!-- structured-process-demo:flow-metadata-ok:mermaid:end -->
 
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span></p>
-<p><strong>flattenFailedStepResults()</strong></p>
+<p><strong>flattenStepResults()</strong></p>
 <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
 <tbody><tr><td colspan="6" style="padding:8px;border-bottom:1px solid #d0d7de;color:#64748b;">No failed step results.</td></tr></tbody>
@@ -1288,14 +1320,14 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
   description: 'Demonstrates withContext() and flow.run(data, ctx).',
 })
   .withContext<ContextFlowCtx>()
-  .step(
-    'CTX-10',
-    ({ form }, params) => ({
+  .step({
+    rule: 'CTX-10',
+    fn: ({ form }, params) => ({
       actorLabel: `${params.ctx.role}:${params.ctx.actorId}`,
       reviewTarget: form.id,
     }),
-    { description: 'Attach actor context to the review' }
-  )
+    description: 'Attach actor context to the review',
+  })
 ```
 
 ### Flow Layout
@@ -1375,7 +1407,7 @@ flowchart TD
       }
     }
   ],
-  &quot;flattenFailedStepResults&quot;: []
+  &quot;flattenStepResults&quot;: []
 }</code>
 </pre>
 <!-- structured-process-demo:context-flow-reviewer-result:json:end -->
@@ -1405,7 +1437,7 @@ actorLabel=reviewer:user-7, reviewTarget=ctx-200"]
 <!-- structured-process-demo:context-flow-reviewer:mermaid:end -->
 
 </div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#ecfdf5;color:#166534;border:1px solid #86efac;">successful sequence run</span></p>
-<p><strong>flattenFailedStepResults()</strong></p>
+<p><strong>flattenStepResults()</strong></p>
 <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
 <tbody><tr><td colspan="6" style="padding:8px;border-bottom:1px solid #d0d7de;color:#64748b;">No failed step results.</td></tr></tbody>
@@ -1425,7 +1457,7 @@ actorLabel=reviewer:user-7, reviewTarget=ctx-200"]
 
 ## Map Example
 
-This flow demonstrates mapped callback data and ctx. The flow-level `map` derives a callback-shaped `data` object and a
+This flow demonstrates mapped callback data and ctx. The flow-level `step.map` derives a callback-shaped `data` object and a
 callback-specific `ctx` object for each step.
 
 <a id="map-flow-code-block"></a>
@@ -1433,38 +1465,38 @@ callback-specific `ctx` object for each step.
 const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
   name: 'Mapped Review Flow',
   description: 'Demonstrates flow-level map() overrides for callback data and ctx.',
-  map: ({ data }) => ({
-    data: {
-      submissionId: data.form.id,
-      occupancyCount: data.form.occupantCount,
-      summary: data.summary,
-    },
-    ctx: {
-      submissionId: data.form.id,
-      occupancyCount: data.form.occupantCount,
-      requiresManualReview: data.form.requiresManualReview,
-      summary: data.summary,
-    },
-  }),
+  step: {
+    map: ({ data }) => ({
+      data: {
+        submissionId: data.form.id,
+        occupancyCount: data.form.occupantCount,
+        summary: data.summary,
+      },
+      ctx: {
+        submissionId: data.form.id,
+        occupancyCount: data.form.occupantCount,
+        requiresManualReview: data.form.requiresManualReview,
+        summary: data.summary,
+      },
+    }),
+  },
 })
-  .step(
-    'MAP-10',
-    (data, params) => ({
+  .step({
+    rule: 'MAP-10',
+    fn: (data, params) => ({
       summary: `${data.submissionId}:${data.occupancyCount}`,
       reviewTarget: params.ctx.submissionId,
     }),
-    { description: 'Use mapped callback data and ctx' }
-  )
-  .step(
-    'MAP-20',
-    (data, params) =>
+    description: 'Use mapped callback data and ctx',
+  })
+  .step({
+    rule: 'MAP-20',
+    fn: (data, params) =>
       params.ctx.requiresManualReview
-        ? error({ variables: { info: `Escalate ${data.summary ?? 'missing-summary'}` } })
+        ? fail({ variables: { info: `Escalate ${data.summary ?? 'missing-summary'}` } })
         : { info: `Auto-approve ${data.summary ?? 'missing-summary'}` },
-    {
-      description: 'Use the same mapped callback data and ctx after step output has updated the flow data',
-    }
-  )
+    description: 'Use the same mapped callback data and ctx after step output has updated the flow data',
+  })
 ```
 
 ### Flow Layout
@@ -1537,7 +1569,7 @@ flowchart TD
 <!-- structured-process-demo:map-flow-manual-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
-  &quot;status&quot;: &quot;error&quot;,
+  &quot;status&quot;: &quot;fail&quot;,
   &quot;stepResults&quot;: [
     {
       &quot;id&quot;: &quot;MAP-10&quot;,
@@ -1551,16 +1583,16 @@ flowchart TD
     {
       &quot;id&quot;: &quot;MAP-20&quot;,
       &quot;description&quot;: &quot;Use the same mapped callback data and ctx after step output has updated the flow data&quot;,
-      &quot;status&quot;: &quot;error&quot;,
+      &quot;status&quot;: &quot;fail&quot;,
       &quot;variables&quot;: {
         &quot;info&quot;: &quot;Escalate missing-summary&quot;
       }
     }
   ],
-  &quot;flattenFailedStepResults&quot;: [
+  &quot;flattenStepResults&quot;: [
     {
       &quot;id&quot;: &quot;MAP-20&quot;,
-      &quot;status&quot;: &quot;error&quot;,
+      &quot;status&quot;: &quot;fail&quot;,
       &quot;description&quot;: &quot;Use the same mapped callback data and ctx after step output has updated the flow data&quot;,
       &quot;variables&quot;: {
         &quot;info&quot;: &quot;Escalate missing-summary&quot;
@@ -1582,10 +1614,10 @@ flowchart TD
 summary=map-400:1, reviewTarget=map-400"]
   step_0 --> step_1
   step_1["MAP-20: Use the same mapped callback data and ctx after step output has updated the flow data
-[error]
+[fail]
 Escalate missing-summary"]
   step_1 --> done
-  done([Completed with Errors])
+  done([Completed with Failures])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
   classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px
@@ -1600,14 +1632,14 @@ Escalate missing-summary"]
 ```
 <!-- structured-process-demo:map-flow-manual:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span></p>
-<p><strong>flattenFailedStepResults()</strong></p>
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with failures</span></p>
+<p><strong>flattenStepResults()</strong></p>
 <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">MAP-20</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Use the same mapped callback data and ctx after step output has updated the flow data</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Escalate missing-summary&quot;}</td>
@@ -1625,7 +1657,7 @@ Escalate missing-summary"]
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">MAP-20</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Use the same mapped callback data and ctx after step output has updated the flow data</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Escalate missing-summary&quot;}</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 </tr></tbody>
@@ -1639,21 +1671,29 @@ This example uses `ruleId()` so ids and descriptions can be defined together whi
 <a id="rule-flow-code-block"></a>
 ```ts
 const reviewFlow = createSyncFlow<ReviewData>()
-  .step(meta('VALIDATE-1', 'Validate request'), ({ form }, _params) => ({
-    valid: form.id.length > 0,
-  }))
-  .branch(
-    ({ data: { form } }) => (form.requiresManualReview ? 'manual' : 'auto'),
-    {
-      auto: createSyncFlow<ReviewData>().step(meta('AUTO-1', 'Auto approve'), ({ checks }, _params) => ({
-        checksSeen: checks.length,
-      })),
-      manual: createSyncFlow<ReviewData>().step(meta('MANUAL-1', 'Send to manual review'), ({ form }, _params) =>
-        error({ variables: { info: `Manual review required for ${form.id}.` } })
-      ),
+  .step({
+    rule: meta('VALIDATE-1', 'Validate request'),
+    fn: ({ form }, _params) => ({
+      valid: form.id.length > 0,
+    }),
+  })
+  .branch({
+    init: ({ data: { form } }) => (form.requiresManualReview ? 'manual' : 'auto'),
+    branches: {
+      auto: createSyncFlow<ReviewData>().step({
+        rule: meta('AUTO-1', 'Auto approve'),
+        fn: ({ checks }, _params) => ({
+          checksSeen: checks.length,
+        }),
+      }),
+      manual: createSyncFlow<ReviewData>().step({
+        rule: meta('MANUAL-1', 'Send to manual review'),
+        fn: ({ form }, _params) => fail({ variables: { info: `Manual review required for ${form.id}.` } }),
+      }),
     },
-    { name: 'REVIEW-1', description: 'Route review' }
-  )
+    name: 'REVIEW-1',
+    description: 'Route review',
+  })
 ```
 
 ### Flow Layout
@@ -1767,7 +1807,7 @@ end"]
 <!-- structured-process-demo:rule-flow-manual-result:json:start -->
 <pre style="margin:0;padding:12px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;overflow:auto;font-size:12px;line-height:1.45;">
 <code>{
-  &quot;status&quot;: &quot;error&quot;,
+  &quot;status&quot;: &quot;fail&quot;,
   &quot;stepResults&quot;: [
     {
       &quot;id&quot;: &quot;VALIDATE-1&quot;,
@@ -1780,19 +1820,19 @@ end"]
     {
       &quot;name&quot;: &quot;REVIEW-1&quot;,
       &quot;description&quot;: &quot;Route review&quot;,
-      &quot;status&quot;: &quot;error&quot;,
+      &quot;status&quot;: &quot;fail&quot;,
       &quot;selectedBranchKeys&quot;: [
         &quot;manual&quot;
       ],
       &quot;branches&quot;: [
         {
           &quot;key&quot;: &quot;manual&quot;,
-          &quot;status&quot;: &quot;error&quot;,
+          &quot;status&quot;: &quot;fail&quot;,
           &quot;stepResults&quot;: [
             {
               &quot;id&quot;: &quot;MANUAL-1&quot;,
               &quot;description&quot;: &quot;Send to manual review&quot;,
-              &quot;status&quot;: &quot;error&quot;,
+              &quot;status&quot;: &quot;fail&quot;,
               &quot;variables&quot;: {
                 &quot;info&quot;: &quot;Manual review required for 400.&quot;
               }
@@ -1813,10 +1853,10 @@ end"]
       ]
     }
   ],
-  &quot;flattenFailedStepResults&quot;: [
+  &quot;flattenStepResults&quot;: [
     {
       &quot;id&quot;: &quot;MANUAL-1&quot;,
-      &quot;status&quot;: &quot;error&quot;,
+      &quot;status&quot;: &quot;fail&quot;,
       &quot;description&quot;: &quot;Send to manual review&quot;,
       &quot;variables&quot;: {
         &quot;info&quot;: &quot;Manual review required for 400.&quot;
@@ -1839,7 +1879,7 @@ valid=true"]
   step_0 --> step_1
   step_1["REVIEW-1: Route review
 branches: manual
-[error]"]
+[fail]"]
   branch_1_end["REVIEW-1:
 end"]
   branch_1_end --> done
@@ -1847,7 +1887,7 @@ end"]
   branch_1_0_start["Branch: manual"]
   step_1 --> branch_1_0_start
   branch_1_0_step_0["MANUAL-1: Send to manual review
-[error]
+[fail]
 Manual review required for 400."]
   branch_1_0_start --> branch_1_0_step_0
   branch_1_0_step_0 --> branch_1_end
@@ -1862,7 +1902,7 @@ Manual review required for 400."]
   branch_1_1_step_0 --> branch_1_end
   class branch_1_1_step_0 neutral
   class branch_1_1_start neutral
-  done([Completed with Errors])
+  done([Completed with Failures])
   start --> step_0
   classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px
   classDef success fill:#ecfdf5,stroke:#16a34a,stroke-width:2px
@@ -1877,14 +1917,14 @@ Manual review required for 400."]
 ```
 <!-- structured-process-demo:rule-flow-manual:mermaid:end -->
 
-</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with errors</span></p>
-<p><strong>flattenFailedStepResults()</strong></p>
+</div></div><div><p><strong>Overall outcome:</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">completed with failures</span></p>
+<p><strong>flattenStepResults()</strong></p>
 <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:12px;">
 <thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Path</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Id</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Status</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Description</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Message</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d0d7de;">Variables</th></tr></thead>
 <tbody><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">MANUAL-1</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Send to manual review</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">{&quot;info&quot;:&quot;Manual review required for 400.&quot;}</td>
@@ -1902,12 +1942,12 @@ Manual review required for 400."]
 </tr><tr>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">REVIEW-1</td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;">Route review</td>
-<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></td>
+<td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"></td>
 <td style="padding:8px;border-bottom:1px solid #d0d7de;vertical-align:top;"><div style="margin-bottom:10px;padding-left:0px;">
-<div><strong>manual</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
+<div><strong>manual</strong> <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></div>
 <div style="margin-top:4px;padding-left:12px;">
-<div>MANUAL-1: Send to manual review <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">error</span></div>
+<div>MANUAL-1: Send to manual review <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;">fail</span></div>
 <div style="margin-top:2px;color:#475569;">{&quot;info&quot;:&quot;Manual review required for 400.&quot;}</div>
 
 </div>
