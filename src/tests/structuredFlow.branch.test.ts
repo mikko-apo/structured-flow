@@ -142,7 +142,7 @@ describe('Flow.branch', () => {
       }),
     })
 
-    const flow = createSyncFlow({
+    const flow = createSyncFlow<ReviewData>({
       name: 'factory-branch-flow',
       branch: {
         branches: {

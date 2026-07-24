@@ -5,6 +5,7 @@ import {
   RuleId,
   StepFnResult,
   type StepFnResultOptions,
+  type StepOptions,
   type StepStatus,
 } from './flowClasses.ts'
 import { Flow, type CreateFlowFactory } from './flow.ts'
@@ -58,7 +59,12 @@ function withFlowOptions(syncMode: boolean, options?: object): FlowOptions {
 }
 
 function createFlow<SyncMode extends boolean>(syncMode: SyncMode): CreateFlowFactory<SyncMode> {
-  return ((config: { step?: object; branch?: BranchOptions } = {}) => {
+  return ((
+    config: {
+      step?: Rule | (Omit<StepOptions, 'fn'> & { fn?: StepOptions['fn'] })
+      branch?: BranchOptions
+    } = {}
+  ) => {
     const { step, branch, ...flowOptions } = config
     const flow = new Flow([], withFlowOptions(syncMode, flowOptions))
 
@@ -67,6 +73,11 @@ function createFlow<SyncMode extends boolean>(syncMode: SyncMode): CreateFlowFac
     }
 
     if (step !== undefined) {
+      if (!(step instanceof Rule) && step.rule instanceof Rule && step.fn === undefined) {
+        const { rule, ...stepOptions } = step
+        return (flow.step as any)(rule, stepOptions)
+      }
+
       return (flow.step as any)(step)
     }
 
@@ -78,5 +89,30 @@ function createFlow<SyncMode extends boolean>(syncMode: SyncMode): CreateFlowFac
   }) as CreateFlowFactory<SyncMode>
 }
 
+/**
+ * `createSyncFlow()` and `createAsyncFlow()` support these forms:
+ *
+ * - `createXFlow()`
+ * - `createXFlow(flowOptions)`
+ * - `createXFlow({ ...flowOptions, step: rule })`
+ * - `createXFlow({ ...flowOptions, step: { rule, fn?, ...stepParams } })`
+ * - `createXFlow({ ...flowOptions, branch: { branches, init?, ...branchParams } })`
+ *
+ * Flow options:
+ *
+ * - `name`: optional display name.
+ * - `description`: optional human-readable description.
+ * - `stepDefaults.resolver`: resolves step ids and descriptions.
+ * - `stepDefaults.map`: maps data and context before every step or branch initializer.
+ * - `stepDefaults.mapResult`: maps every raw step result before a step-specific mapper.
+ * - `stepDefaults.trueIsFail`: treats boolean `true` as `fail` and `false` as `ok` by default.
+ * - `step`: optional initial `Rule` or step object; `fn` is optional for a `Rule` and required for a `RuleId` or string.
+ * - `branch`: optional initial branch using the same parameters as `Flow.branch({ ... })`.
+ *
+ * `syncMode` is selected by the factory, and `allowContext` is enabled by `withContext()`.
+ * The `step` and `branch` initializers are mutually exclusive.
+ *
+ * `createSyncFlow()` accepts only synchronous callbacks. `createAsyncFlow()` accepts synchronous or asynchronous callbacks.
+ */
 export const createSyncFlow = createFlow(true)
 export const createAsyncFlow = createFlow(false)

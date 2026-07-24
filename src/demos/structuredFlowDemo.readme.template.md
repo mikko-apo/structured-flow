@@ -82,7 +82,7 @@ step(rule, options)
 
 step({
   rule: Rule | RuleId | string
-  fn: (data, params) => object | boolean
+  fn ? : (data, params) => object | boolean
   init ? : ({stepInfo, processingState, data, ctx}) => {
     data: object
     ctx: unknown
@@ -91,7 +91,8 @@ step({
 })
 ```
 
-The object form requires `fn`, including when `rule` is a `Rule`; this makes overriding the function explicit.
+The object form requires `fn` for a `RuleId` or string. For a `Rule`, `fn` is optional and overrides the function carried
+by the Rule when supplied.
 
 Step options are:
 

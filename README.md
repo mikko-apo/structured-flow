@@ -23,11 +23,11 @@ Contents:
   - [No Kids](#core-api-no-kids-full-table)
   - [Two Kids](#core-api-two-kids-full-table)
   - [Missing Name](#core-api-missing-name-full-table)
-- [Flow metadata](#flow-metadata-flow-html)
+- [Named Review Flow](#flow-metadata-flow-html)
   - [Ok](#flow-metadata-ok-full-table)
-- [Context-aware flow](#context-flow-flow-html)
+- [Actor-aware Review](#context-flow-flow-html)
   - [Reviewer](#context-flow-reviewer-full-table)
-- [Mapped payload flow](#map-flow-flow-html)
+- [Mapped Review Flow](#map-flow-flow-html)
   - [Manual](#map-flow-manual-full-table)
 - [Rule helper flow](#rule-flow-flow-html)
   - [Manual](#rule-flow-manual-full-table)
@@ -98,7 +98,7 @@ step(rule, options)
 
 step({
   rule: Rule | RuleId | string
-  fn: (data, params) => object | boolean
+  fn ? : (data, params) => object | boolean
   init ? : ({stepInfo, processingState, data, ctx}) => {
     data: object
     ctx: unknown
@@ -107,7 +107,8 @@ step({
 })
 ```
 
-The object form requires `fn`, including when `rule` is a `Rule`; this makes overriding the function explicit.
+The object form requires `fn` for a `RuleId` or string. For a `Rule`, `fn` is optional and overrides the function carried
+by the Rule when supplied.
 
 Step options are:
 
@@ -1178,7 +1179,7 @@ surrounding tooling or documentation.
 
 <a id="flow-metadata-code-block"></a>
 ```ts
-const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
+const namedReviewFlow = createSyncFlow<MetadataFlowData>({
   name: 'Named Review Flow',
   description: 'Demonstrates flow-level name and description metadata.',
 }).step({
@@ -1315,7 +1316,7 @@ This flow uses `withContext()` so `flow.run(data, ctx)` passes a separate contex
 
 <a id="context-flow-code-block"></a>
 ```ts
-const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
+const actorAwareFlow = createSyncFlow<ContextFlowData>({
   name: 'Actor-aware Review',
   description: 'Demonstrates withContext() and flow.run(data, ctx).',
 })
@@ -1462,10 +1463,10 @@ callback-specific `ctx` object for each step.
 
 <a id="map-flow-code-block"></a>
 ```ts
-const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
+const mappedReviewFlow = createSyncFlow<MapFlowData, MapFlowMapper>({
   name: 'Mapped Review Flow',
   description: 'Demonstrates flow-level map() overrides for callback data and ctx.',
-  step: {
+  stepDefaults: {
     map: ({ data }) => ({
       data: {
         submissionId: data.form.id,

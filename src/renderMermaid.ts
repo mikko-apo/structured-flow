@@ -1,7 +1,6 @@
 import { getOwnEntries, getRuleId } from './utils.ts'
 import { type FlowResult, type StepResult, type StepStatus } from './flowClasses.ts'
 
-type MermaidStepResult = StepResult
 type MermaidFlowLike = {
   steps: readonly MermaidFlowStepInfo[]
 }
@@ -15,13 +14,6 @@ type MermaidFlowStepInfo = {
   branches?: Record<PropertyKey, MermaidFlowLike>
 }
 type MermaidRenderable = MermaidFlowLike | Pick<FlowResult, 'status' | 'stepResults'>
-
-type RenderableBranch = {
-  key: PropertyKey
-  status?: StepStatus
-  steps: readonly MermaidFlowStepInfo[]
-  stepResults?: readonly MermaidStepResult[]
-}
 
 const mermaidClassDefinitions = [
   '  classDef executed fill:#e8f1ff,stroke:#1d4ed8,stroke-width:2px',
@@ -65,10 +57,6 @@ function statusToClassName(status: StepStatus): string {
   return status === 'ok' ? 'success' : status === 'skip' ? 'neutral' : status === 'stop' ? 'complete' : 'failure'
 }
 
-function getStepDescription(step: MermaidFlowStepInfo): string {
-  return typeof step.options?.description === 'string' ? step.options.description : ''
-}
-
 function getStepTitle(step: MermaidFlowStepInfo): string {
   return typeof step.options?.name === 'string' ? step.options.name : (step.id ?? '')
 }
@@ -81,7 +69,15 @@ function getBranchEntries(step: MermaidFlowStepInfo): Array<[PropertyKey, Mermai
   return getOwnEntries(step.branches)
 }
 
-function getRenderableBranches(step: MermaidFlowStepInfo, stepResult?: MermaidStepResult): RenderableBranch[] {
+function getRenderableBranches(
+  step: MermaidFlowStepInfo,
+  stepResult?: StepResult
+): Array<{
+  key: PropertyKey
+  status?: StepStatus
+  steps: readonly MermaidFlowStepInfo[]
+  stepResults?: readonly StepResult[]
+}> {
   if (stepResult?.branches != null) {
     return stepResult.branches.map((branch) => ({
       key: branch.key,
@@ -97,7 +93,7 @@ function getRenderableBranches(step: MermaidFlowStepInfo, stepResult?: MermaidSt
   }))
 }
 
-function renderStepPayload(stepResult: MermaidStepResult): string {
+function renderStepPayload(stepResult: StepResult): string {
   if (stepResult.variables == null || Object.keys(stepResult.variables).length === 0) {
     return ''
   }
@@ -109,12 +105,12 @@ function renderStepPayload(stepResult: MermaidStepResult): string {
   return formatMermaidValue(stepResult.variables)
 }
 
-function renderStepLabel(step: MermaidFlowStepInfo, stepResult?: MermaidStepResult): string {
+function renderStepLabel(step: MermaidFlowStepInfo, stepResult?: StepResult): string {
   const selectedBranchKeys =
     stepResult?.selectedBranchKeys?.map((branchKey) => String(branchKey)) ??
     stepResult?.branches?.filter((branch) => branch.status !== 'skip').map((branch) => String(branch.key))
   const staticBranchKeys = getBranchEntries(step).map(([key]) => String(key))
-  const description = getStepDescription(step)
+  const description = typeof step.options?.description === 'string' ? step.options.description : ''
   const payload = stepResult == null ? '' : renderStepPayload(stepResult)
   const stepTitle = getStepTitle(step)
   const ruleId = step.branches == null ? undefined : getRuleId(step.rawId)
@@ -146,7 +142,7 @@ function renderBranchGraphLines(
   parentNodeId: string,
   nextNodeId: string | undefined,
   step: MermaidFlowStepInfo,
-  stepResult: MermaidStepResult | undefined,
+  stepResult: StepResult | undefined,
   branchPrefix: string
 ): string[] {
   const branches = getRenderableBranches(step, stepResult)
@@ -209,27 +205,20 @@ function renderBranchGraphLines(
   return lines
 }
 
-function renderDoneLabel(status: StepStatus): string {
-  if (status === 'exception') {
-    return 'Stopped by Exception'
-  }
-
-  if (status === 'stop') {
-    return 'Completed Early'
-  }
-
-  if (status === 'fail') {
-    return 'Completed with Failures'
-  }
-
-  return 'Done'
-}
-
 export function renderProcessAsMermaidGraph(value: MermaidRenderable): string {
   const sequenceResult = hasStepResults(value) ? value : undefined
-  const steps = hasStepResults(value) ? value.stepResults.map((stepResult) => stepResult.stepInfo) : value.steps
+  const steps = sequenceResult?.stepResults.map((stepResult) => stepResult.stepInfo) ?? (value as MermaidFlowLike).steps
   const lines = ['flowchart TD', '  start([Start])']
-  const doneLabel = sequenceResult == null ? 'Done' : renderDoneLabel(sequenceResult.status)
+  const doneLabel =
+    sequenceResult == null
+      ? 'Done'
+      : ((
+          {
+            exception: 'Stopped by Exception',
+            stop: 'Completed Early',
+            fail: 'Completed with Failures',
+          } as Partial<Record<StepStatus, string>>
+        )[sequenceResult.status] ?? 'Done')
 
   if (steps.length === 0) {
     lines.push(`  done([${doneLabel}])`)

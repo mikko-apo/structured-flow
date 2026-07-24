@@ -119,9 +119,7 @@ describe('structuredFlow core execution', () => {
 
   it('creates a one-step flow directly from a rule', () => {
     const directRule = defineRule('DIRECT-RULE', ({ person }: PersonData) => ({ personId: person.id }))
-    const flow = createSyncFlow({
-      step: { rule: directRule, fn: directRule.stepFn },
-    })
+    const flow = createSyncFlow({ step: directRule })
 
     expect(
       convertResultNode(
@@ -151,8 +149,8 @@ describe('structuredFlow core execution', () => {
       name: 'Direct rule flow',
       stepDefaults: {
         mapResult: ({ result }) => {
-          expectTypeOf(result).toEqualTypeOf<RawStepFnResult | undefined>()
-          return result == null || typeof result === 'boolean' ? result : { ...result, mapped: true }
+          expectTypeOf(result).toEqualTypeOf<RawStepFnResult>()
+          return typeof result === 'boolean' ? result : { ...result, mapped: true }
         },
       },
     }).step(chainedRule)
@@ -192,6 +190,35 @@ describe('structuredFlow core execution', () => {
     })
   })
 
+  it('types and runs an initialized factory step', () => {
+    const flow = createSyncFlow({
+      step: {
+        rule: 'FACTORY-INIT',
+        init: ({ data }: { data: PersonData }) => ({
+          data: { personId: data.person.id },
+          ctx: { traceId: data.person.id },
+        }),
+        fn: (data, params) => {
+          expectTypeOf(data.personId).toEqualTypeOf<string>()
+          expectTypeOf(params.ctx.traceId).toEqualTypeOf<string>()
+          return { matched: data.personId === params.ctx.traceId }
+        },
+      },
+    })
+
+    expect(
+      convertResultNode(
+        flow.run({
+          person: { id: 'factory-init', name: 'Factory', age: 30 },
+          route: 'approve',
+          checks: [],
+        })
+      )
+    ).toMatchObject({
+      stepResults: [{ id: 'FACTORY-INIT', variables: { matched: true } }],
+    })
+  })
+
   it('passes a separate ctx to steps when the builder uses withContext()', () => {
     type RequestCtx = {
       actorId: string
@@ -226,9 +253,9 @@ describe('structuredFlow core execution', () => {
 
     expectTypeOf<Parameters<typeof flow.run>>().toEqualTypeOf<[data: PersonData, ctx: RequestCtx]>()
 
-    // @ts-expect-error second parameter must match the configured ctx type
     builder.step({
       rule: meta('CTX-2', 'Invalid ctx'),
+      // @ts-expect-error second parameter must match the configured ctx type
       fn: (data, params: { ctx: { wrong: true } }) => ({
         actorId: String(params.ctx.wrong),
         personId: data.person.id,
@@ -362,7 +389,7 @@ describe('structuredFlow core execution', () => {
     }
 
     let mappedFlow: unknown
-    const flow = createSyncFlow<string, PersonData, FlowMap>({
+    const flow = createSyncFlow<PersonData, FlowMap>({
       stepDefaults: {
         map: ({ data, processingState }) => {
           mappedFlow = processingState.flow
@@ -397,10 +424,10 @@ describe('structuredFlow core execution', () => {
     })
     expect(mappedFlow).toBe(flow)
 
-    createSyncFlow<string, PersonData, FlowMap>({
-      // @ts-expect-error the retained flow map only accepts the original undefined ctx
-      stepDefaults: { map: flow.options.stepDefaults.map! },
-    }).withContext<{ actorId: string }>()
+    createSyncFlow<PersonData, FlowMap>({
+      // @ts-expect-error public FlowOptions intentionally erases the retained mapper's exact input type
+      stepDefaults: { map: flow.options.stepDefaults!.map! },
+    })
   })
 
   it('types step init and mapResult in runtime execution order', () => {
@@ -423,8 +450,8 @@ describe('structuredFlow core execution', () => {
       Id,
       MappedStepData,
       MappedStepCtx,
-      RawStepFnResult | undefined,
-      RawStepFnResult | undefined,
+      RawStepFnResult,
+      RawStepFnResult,
       PersonData,
       undefined,
       StateStepInfo
@@ -449,9 +476,9 @@ describe('structuredFlow core execution', () => {
       expectTypeOf(processingState.ctx).toEqualTypeOf<undefined>()
       expectTypeOf(data).toEqualTypeOf<MappedStepData>()
       expectTypeOf(ctx).toEqualTypeOf<MappedStepCtx>()
-      expectTypeOf(result).toEqualTypeOf<RawStepFnResult | undefined>()
+      expectTypeOf(result).toEqualTypeOf<RawStepFnResult>()
 
-      return result == null || typeof result === 'boolean' ? result : { ...result, mapped: true }
+      return typeof result === 'boolean' ? result : { ...result, mapped: true }
     }
     const options = { init, mapResult }
     const stepFn: StepFn = (data, params) => {
@@ -484,20 +511,20 @@ describe('structuredFlow core execution', () => {
       processingState: { index: number }
       data: PersonData
       ctx: undefined
-      result: RawStepFnResult | undefined
-    }) => RawStepFnResult | undefined
+      result: RawStepFnResult
+    }) => RawStepFnResult
     type ExpectedResultInput = StepResultMapInput<
       'MAP-RESULT-1',
       PersonData,
       undefined,
-      false | { passed: boolean } | undefined,
+      false | { passed: boolean },
       PersonData,
       undefined,
       unknown
     >
     expectTypeOf<ExpectedResultInput>().toExtend<Parameters<FlowResultMap>[0]>()
 
-    const flow = createSyncFlow<string, PersonData, undefined, FlowResultMap>({
+    const flow = createSyncFlow<PersonData, undefined, FlowResultMap>({
       stepDefaults: {
         mapResult: ({ data, result }) => {
           if (result === false) {
@@ -511,7 +538,7 @@ describe('structuredFlow core execution', () => {
       .step({
         rule: 'MAP-RESULT-1',
         fn: ({ route }, _params) => (route === 'reject' ? false : { passed: true }),
-        mapResult: ({ result }: { result: RawStepFnResult | undefined }) => {
+        mapResult: ({ result }: { result: RawStepFnResult }) => {
           const source =
             result != null && !(result instanceof StepResult) && typeof result === 'object' && 'source' in result
               ? result.source
@@ -543,14 +570,56 @@ describe('structuredFlow core execution', () => {
   })
 
   it('rejects incompatible mapResult inputs at the step boundary', () => {
-    // @ts-expect-error mapResult must accept every possible raw step result
     createSyncFlow<PersonData>().step({
       rule: 'INVALID-RESULT-MAP',
       fn: () => ({ accepted: true }),
+      // @ts-expect-error mapResult must accept every possible raw step result
       mapResult: ({ result }: { result: false | undefined }) => result,
     })
 
     expect(true).toBe(true)
+  })
+
+  it('requires mapResult to return a raw result and treats untyped undefined as an exception', () => {
+    const factoryRule = defineRule('INVALID-FACTORY-RESULT-MAP', (_data: PersonData) => true)
+
+    createSyncFlow({
+      // @ts-expect-error factory mapResult must return a valid raw step result
+      step: {
+        rule: factoryRule,
+        fn: factoryRule.stepFn,
+        mapResult: () => undefined,
+      },
+    })
+
+    createSyncFlow<PersonData>().step({
+      rule: 'INVALID-UNDEFINED-RESULT-MAP',
+      fn: () => true,
+      // @ts-expect-error mapResult must return a valid raw step result
+      mapResult: () => undefined,
+    })
+
+    const flow = createSyncFlow<PersonData>().step({
+      rule: 'UNTYPED-UNDEFINED-RESULT-MAP',
+      fn: () => true,
+      mapResult: (() => undefined) as any,
+    })
+    const result = flow.run({
+      person: { id: 'p1', name: 'Ada', age: 31 },
+      route: 'approve',
+      checks: [],
+    })
+
+    expect(convertResultNode(result)).toMatchObject({
+      status: 'exception',
+      stepResults: [
+        {
+          id: 'UNTYPED-UNDEFINED-RESULT-MAP',
+          status: 'exception',
+          message: 'Flow step "UNTYPED-UNDEFINED-RESULT-MAP" mapResult returned undefined',
+        },
+      ],
+    })
   })
 
   it('parses status, stores the remaining payload on the step result, and supports result remapping', () => {
@@ -726,9 +795,9 @@ describe('structuredFlow core execution', () => {
       }),
     })
 
-    // @ts-expect-error invalid step data contract
     builder.step({
       rule: meta('TYPE-2', 'Invalid ctx access'),
+      // @ts-expect-error invalid step data contract
       fn: ({ missing }: { missing: number }, _params: { ctx: undefined }) => ({
         seen: missing,
       }),
@@ -858,7 +927,7 @@ describe('structuredFlow core execution', () => {
     expect(
       flattenStepResults(result.stepResults, ({ failed, flattenedResult, stepResult }) =>
         flattenedResult.status === 'ok'
-          ? { id: flattenedResult.id, sourceStatus: stepResult.status, failed }
+          ? { id: flattenedResult.id, sourceStatus: stepResult.status, failed, omitted: undefined }
           : undefined
       )
     ).toEqual([
@@ -988,7 +1057,7 @@ describe('structuredFlow core execution', () => {
       calls.push('flow map')
       return { data, ctx }
     }
-    const flowResultMap = async ({ result }: { result: RawStepFnResult | undefined }) => {
+    const flowResultMap = async ({ result }: { result: RawStepFnResult }) => {
       await Promise.resolve()
       calls.push('flow result map')
       return result
@@ -1000,7 +1069,7 @@ describe('structuredFlow core execution', () => {
         return { branchPersonId: person.id }
       },
     })
-    const flow = createAsyncFlow<string, PersonData, typeof flowMap, typeof flowResultMap>({
+    const flow = createAsyncFlow<PersonData, typeof flowMap, typeof flowResultMap>({
       stepDefaults: {
         map: flowMap,
         mapResult: flowResultMap,
@@ -1053,9 +1122,9 @@ describe('structuredFlow core execution', () => {
 
   it('type-checks callback async behavior from syncMode', () => {
     const asyncMap = async ({ data, ctx }: { data: PersonData; ctx: undefined }) => ({ data, ctx })
-    const asyncResultMap = async ({ result }: { result: RawStepFnResult | undefined }) => result
+    const asyncResultMap = async ({ result }: { result: RawStepFnResult }) => result
 
-    createAsyncFlow<string, PersonData, typeof asyncMap, typeof asyncResultMap>({
+    createAsyncFlow<PersonData, typeof asyncMap, typeof asyncResultMap>({
       stepDefaults: {
         map: asyncMap,
         mapResult: asyncResultMap,
@@ -1069,6 +1138,27 @@ describe('structuredFlow core execution', () => {
         mapResult: async ({ result }) => result,
       })
 
+    createAsyncFlow({
+      step: {
+        rule: 'ASYNC-FACTORY-STEP',
+        fn: async () => true,
+      },
+    })
+
+    const asyncFactoryRule = defineRule('ASYNC-FACTORY-RULE', async (_data: PersonData) => true)
+    createAsyncFlow({ step: asyncFactoryRule })
+
+    // @ts-expect-error sync factories cannot use async rules
+    createSyncFlow({ step: asyncFactoryRule })
+
+    createSyncFlow({
+      // @ts-expect-error sync factory steps cannot be async
+      step: {
+        rule: 'SYNC-FACTORY-STEP',
+        fn: async () => true,
+      },
+    })
+
     createSyncFlow<PersonData>({
       stepDefaults: {
         // @ts-expect-error sync flow maps must return synchronously
@@ -1079,7 +1169,7 @@ describe('structuredFlow core execution', () => {
     createSyncFlow<PersonData>({
       stepDefaults: {
         // @ts-expect-error sync flow result maps must return synchronously
-        mapResult: async ({ result }: { result: RawStepFnResult | undefined }) => result,
+        mapResult: async ({ result }: { result: RawStepFnResult }) => result,
       },
     })
 
@@ -1089,17 +1179,17 @@ describe('structuredFlow core execution', () => {
       branches: { selected: createSyncFlow<PersonData>() },
     })
 
-    // @ts-expect-error sync step initializers must return synchronously
     createSyncFlow<PersonData>().step({
       rule: 'SYNC-TYPE-STEP',
       fn: () => true,
+      // @ts-expect-error sync step initializers must return synchronously
       init: async ({ data, ctx }) => ({ data, ctx }),
     })
 
-    // @ts-expect-error sync step result maps must return synchronously
     createSyncFlow<PersonData>().step({
       rule: 'SYNC-RESULT-TYPE-STEP',
       fn: () => true,
+      // @ts-expect-error sync step result maps must return synchronously
       mapResult: async ({ result }) => result,
     })
   })

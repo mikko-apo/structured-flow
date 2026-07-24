@@ -9,6 +9,11 @@ it('maps parent data into a reusable validation flow', () => {
     marker?: string
   }
 
+  type UseCaseData = {
+    requestId: string
+    item: ItemData
+  }
+
   const requiredRule = rule('RULE-1', (item?: ItemData) => !item, {
     description: 'Item is missing',
     info: 'validation',
@@ -21,37 +26,23 @@ it('maps parent data into a reusable validation flow', () => {
     description: 'Item has a marker',
     info: 'validation',
   })
-  const resultMapCalls: string[] = []
   const itemValidations = createSyncFlow({
-    step: {
-      rule: requiredRule,
-      fn: requiredRule.stepFn,
-      mapResult: ({ result }) => {
-        resultMapCalls.push('step')
-        return result
-      },
-    },
+    step: requiredRule,
     stepDefaults: {
-      mapResult: ({ result }) => {
-        resultMapCalls.push('flow')
-        return typeof result === 'boolean' ? !result : result
-      },
+      trueIsFail: true,
     },
   })
     .step(stateRule)
     .step(markerRule)
 
-  type UseCaseData = {
-    requestId: string
-    item: ItemData
-  }
-
-  const validationFlow = createSyncFlow<UseCaseData>().branch({
-    init: ({ data }) => ({ data: data.item }),
-    branches: {
-      item: itemValidations,
+  const validationFlow = createSyncFlow<UseCaseData>({
+    branch: {
+      init: ({ data }) => ({ data: data.item }),
+      branches: {
+        item: itemValidations,
+      },
+      path: 'pow',
     },
-    path: 'pow',
   })
 
   const result = validationFlow.run({
@@ -62,7 +53,6 @@ it('maps parent data into a reusable validation flow', () => {
     },
   })
 
-  expect(resultMapCalls).toEqual(['flow', 'step', 'flow', 'flow'])
   expect(convertResultNode(result)).toMatchObject({
     status: 'fail',
     stepResults: [
@@ -82,18 +72,24 @@ it('maps parent data into a reusable validation flow', () => {
       },
     ],
   })
-  const issues = flattenStepResults(result.stepResults).map(({ id, path, message, variables }) => ({
-    code: id,
-    path,
-    message,
-    variables,
-    level: 'error' as const,
-  }))
+  const issues = flattenStepResults(
+    result.stepResults,
+    ({ failed, flattenedResult: { id, path, message, variables } }) =>
+      failed && id !== undefined
+        ? {
+            code: id,
+            path,
+            message,
+            variables,
+            level: 'error' as const,
+          }
+        : undefined
+  )
   expectTypeOf(issues).toEqualTypeOf<
     Array<{
       code: string
-      path: string | undefined
-      message: string | undefined
+      path?: string
+      message?: string
       variables: Record<string, unknown>
       level: 'error'
     }>
@@ -102,7 +98,6 @@ it('maps parent data into a reusable validation flow', () => {
     {
       code: 'RULE-2',
       path: 'pow',
-      message: undefined,
       variables: {},
       level: 'error',
     },

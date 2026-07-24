@@ -7,7 +7,7 @@ export type {
   BranchInitResult,
   BranchOptions,
   FlowOptions,
-  FlowStepOptions,
+  FlowOptionStepDefaults,
   InvocationInput,
   InvocationMap,
   MapResult,

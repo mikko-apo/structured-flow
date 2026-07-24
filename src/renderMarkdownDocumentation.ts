@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 
 import type { FlowResult } from './flowClasses.ts'
 import { renderProcessAsMermaidGraph } from './renderMermaid.ts'
+import { getOwnEntries } from './utils.ts'
 import {
   convertResultNode,
   type ConvertedBranchStepFlowResult,
@@ -11,14 +12,16 @@ import {
   flattenStepResults,
 } from './resultUtils.ts'
 
-type GeneratedBlockKind = 'json' | 'mermaid' | 'html-table'
-
 type FlowStructure = {
   steps: readonly FlowStepInfo[]
 }
 
 type FlowLike = FlowStructure & {
-  run(...args: [data: object] | [data: object, ctx: unknown]): Promise<FlowResult> | FlowResult
+  options?: {
+    name?: string
+    description?: string
+  }
+  run(...args: any[]): Promise<FlowResult> | FlowResult
 }
 
 type FlowStepInfo = {
@@ -31,27 +34,49 @@ type FlowStepInfo = {
   branches?: Record<PropertyKey, FlowStructure>
 }
 
-export type DocumentationDemo<InitialCtx extends object> = {
-  id: string
-  init: InitialCtx
-  ctx?: unknown
+type SourceFiles = string | string[]
+
+type DocumentationDemoFields<Data extends object> = {
+  placeholderId: string
+  data: Data
   title?: string
   description?: string
 }
 
-export type DocumentationFlow<InitialCtx extends object> = {
-  id: string
-  sourceFile?: string
-  flow: FlowLike
+export type DocumentationDemo<TFlow extends FlowLike> =
+  Parameters<TFlow['run']> extends [data: infer Data extends object, ctx: infer Ctx]
+    ? DocumentationDemoFields<Data> & { ctx: Ctx }
+    : Parameters<TFlow['run']> extends [data: infer Data extends object]
+      ? DocumentationDemoFields<Data> & { ctx?: never }
+      : never
+
+export type DocumentationFlow<TFlow extends FlowLike> = {
+  placeholderId: string
+  sourceFiles?: SourceFiles
+  flow: TFlow
+  /** Overrides flow.options.name; required by writeMarkdownDocumentation() when the flow has no name. */
   title?: string
+  /** Overrides flow.options.description; required by writeMarkdownDocumentation() when the flow has no description. */
   description?: string
-  demos?: readonly DocumentationDemo<InitialCtx>[]
+  demos?: readonly DocumentationDemo<TFlow>[]
 }
 
-type AnyDocumentationFlow = DocumentationFlow<any>
+type AnyDocumentationDemo = DocumentationDemoFields<any> & { ctx?: unknown }
+
+type AnyDocumentationFlow = Omit<DocumentationFlow<FlowLike>, 'demos'> & {
+  demos?: readonly AnyDocumentationDemo[]
+}
+
+type TypeCheckedDocumentationFlows<TFlows extends readonly AnyDocumentationFlow[]> = {
+  [Index in keyof TFlows]: TFlows[Index] extends infer DocumentationFlowEntry extends AnyDocumentationFlow
+    ? Omit<DocumentationFlowEntry, 'demos'> & {
+        demos?: readonly DocumentationDemo<DocumentationFlowEntry['flow']>[]
+      }
+    : never
+}
 
 type FormattedItem = {
-  id: string
+  placeholderId: string
   title: string
   description?: string
 }
@@ -60,26 +85,6 @@ type FormattedStepItem = {
   title: string
   description?: string
 }
-
-type StepNodeOf<TFlow extends AnyDocumentationFlow> = TFlow['flow']['steps'][number]
-type StepNodeFromFlows<TFlows extends readonly AnyDocumentationFlow[]> = StepNodeOf<TFlows[number]>
-type FlowMarkerOf<TFlow extends AnyDocumentationFlow> =
-  | `${TFlow['id']}_CODE_BLOCK`
-  | `${TFlow['id']}_FLOW_JSON`
-  | `${TFlow['id']}_STATIC_GRAPH`
-  | `${TFlow['id']}_FLOW_HTML`
-type DemoIdOf<TFlow extends AnyDocumentationFlow> = NonNullable<TFlow['demos']>[number]['id']
-type DemoMarkerOf<TFlow extends AnyDocumentationFlow> =
-  | `${TFlow['id']}_${DemoIdOf<TFlow>}_FULL_TABLE`
-  | `${TFlow['id']}_${DemoIdOf<TFlow>}_INIT_JSON`
-  | `${TFlow['id']}_${DemoIdOf<TFlow>}_RESULT_JSON`
-  | `${TFlow['id']}_${DemoIdOf<TFlow>}_RESULT_MERMAID`
-  | `${TFlow['id']}_${DemoIdOf<TFlow>}_RESULT_HTML`
-type GlobalSectionMarker = 'TOC' | 'ALL_FLOWS_HTML_MERMAID' | 'LEAF_FLOWS_HTML'
-type SectionMarker<TFlows extends readonly AnyDocumentationFlow[]> =
-  | GlobalSectionMarker
-  | FlowMarkerOf<TFlows[number]>
-  | DemoMarkerOf<TFlows[number]>
 
 type HeadingSection = {
   kind: 'heading'
@@ -92,59 +97,60 @@ type ParagraphSection = {
   text: string
 }
 
+type RuntimeDocumentationSection = string | HeadingSection | ParagraphSection
+
 export type DocumentationSection<TFlows extends readonly AnyDocumentationFlow[]> =
-  | SectionMarker<TFlows>
+  | 'TOC'
+  | 'ALL_FLOWS_HTML_MERMAID'
+  | 'LEAF_FLOWS_HTML'
+  | `${TFlows[number]['placeholderId']}_CODE_BLOCK`
+  | `${TFlows[number]['placeholderId']}_FLOW_JSON`
+  | `${TFlows[number]['placeholderId']}_STATIC_GRAPH`
+  | `${TFlows[number]['placeholderId']}_FLOW_HTML`
+  | `${TFlows[number]['placeholderId']}_${NonNullable<TFlows[number]['demos']>[number]['placeholderId']}_FULL_TABLE`
+  | `${TFlows[number]['placeholderId']}_${NonNullable<TFlows[number]['demos']>[number]['placeholderId']}_INIT_JSON`
+  | `${TFlows[number]['placeholderId']}_${NonNullable<TFlows[number]['demos']>[number]['placeholderId']}_RESULT_JSON`
+  | `${TFlows[number]['placeholderId']}_${NonNullable<TFlows[number]['demos']>[number]['placeholderId']}_RESULT_MERMAID`
+  | `${TFlows[number]['placeholderId']}_${NonNullable<TFlows[number]['demos']>[number]['placeholderId']}_RESULT_HTML`
   | HeadingSection
   | ParagraphSection
 
 export type DocumentationFormatter<TNode extends FlowStepInfo = FlowStepInfo> = (
   node: TNode,
-  flowId: string
+  flowPlaceholderId: string
 ) => FormattedStepItem
 
 export type RenderMarkdownDocumentationOptions<
   TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
 > = {
   template: string
-  sourceFile: string
-  formatter?: DocumentationFormatter<StepNodeFromFlows<TFlows>>
-  flows?: TFlows
+  sourceFiles: SourceFiles
+  formatter?: DocumentationFormatter<TFlows[number]['flow']['steps'][number]>
+  flows?: TFlows & TypeCheckedDocumentationFlows<TFlows>
   pageContent?: readonly DocumentationSection<TFlows>[]
-}
-
-type WriteMarkdownDocumentationTemplateOptions<
-  TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
-> = Omit<RenderMarkdownDocumentationOptions<TFlows>, 'template' | 'sourceFile'> & {
-  templateFile: string
-  pageContent?: never
-  documentationSourceFile: string
-  outputFile: string
-  printReport?: boolean
-}
-
-type WriteMarkdownDocumentationPageContentOptions<
-  TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
-> = Omit<RenderMarkdownDocumentationOptions<TFlows>, 'template' | 'sourceFile'> & {
-  templateFile?: never
-  pageContent: readonly DocumentationSection<TFlows>[]
-  documentationSourceFile: string
-  outputFile: string
-  printReport?: boolean
 }
 
 export type WriteMarkdownDocumentationOptions<
   TFlows extends readonly AnyDocumentationFlow[] = readonly AnyDocumentationFlow[],
-> = WriteMarkdownDocumentationTemplateOptions<TFlows> | WriteMarkdownDocumentationPageContentOptions<TFlows>
+> = Omit<RenderMarkdownDocumentationOptions<TFlows>, 'template' | 'pageContent'> & {
+  outputFile: string
+  printReport?: boolean
+} & (
+    | {
+        templateFile: string
+        pageContent?: never
+      }
+    | {
+        templateFile?: never
+        pageContent: readonly DocumentationSection<TFlows>[]
+      }
+  )
 
-type DemoRender<InitialCtx extends object> = {
-  demo: DocumentationDemo<InitialCtx>
+type DemoRender = {
+  demo: AnyDocumentationDemo
   result: FlowResult
   convertedResult: ConvertedFlowResult
   failedStepResults: FlattenedFailedStepResult[]
-}
-
-function escapeMarkdownCodeBlock(value: string): string {
-  return value.replaceAll('```', '\\`\\`\\`')
 }
 
 function escapeHtml(value: string): string {
@@ -181,18 +187,6 @@ function formatDescription(description: unknown): string {
 
 function truncate(value: string, maxLength = 160): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`
-}
-
-function getStepDescription(step: Pick<FlowStepInfo, 'options'>): string | undefined {
-  return typeof step.options?.description === 'string' ? step.options.description : undefined
-}
-
-function defaultFormatter(node: FlowStepInfo, flowId: string): FormattedStepItem {
-  void flowId
-  return {
-    title: node.options?.name ?? node.id ?? '',
-    description: getStepDescription(node),
-  }
 }
 
 function formatRuleId(ruleId: unknown): string | undefined {
@@ -271,7 +265,7 @@ function serializeForJson(value: unknown): unknown {
   return value
 }
 
-function wrapGeneratedBlock(markerId: string, kind: GeneratedBlockKind, content: string): string {
+function wrapGeneratedBlock(markerId: string, kind: 'json' | 'mermaid' | 'html-table', content: string): string {
   return [
     `<!-- structured-process-demo:${markerId}:${kind}:start -->`,
     content,
@@ -283,9 +277,7 @@ function wrapWithAnchor(anchorId: string, content: string): string {
   return [`<a id="${escapeHtml(anchorId)}"></a>`, content].join('\n')
 }
 
-function renderPageContent<TFlows extends readonly AnyDocumentationFlow[]>(
-  pageContent: readonly DocumentationSection<TFlows>[]
-): string {
+function renderPageContent(pageContent: readonly RuntimeDocumentationSection[]): string {
   return pageContent
     .map((item) => {
       if (typeof item === 'string') {
@@ -474,30 +466,35 @@ function renderJsonCodeBlock(markerId: string, value: unknown): string {
   )
 }
 
-function renderFlowConfigurationJson(markerId: string, flow: unknown): string {
-  return renderJsonCodeBlock(markerId, serializeForJson(flow))
-}
-
 function renderMermaidBlock(markerId: string, graph: string): string {
   return wrapGeneratedBlock(markerId, 'mermaid', ['```mermaid', graph, '```'].join('\n'))
 }
 
-function sourceMarker(id: string, boundary: 'START' | 'END'): string {
-  return `/* ${id}:${boundary} */`
+function sourceMarker(placeholderId: string, boundary: 'START' | 'END'): string {
+  return `/* ${placeholderId}:${boundary} */`
 }
 
-function readCodeBlockFromSource(sourceFile: string, id: string): string {
-  const source = readFileSync(sourceFile, 'utf8')
-  const startMarker = sourceMarker(id, 'START')
-  const endMarker = sourceMarker(id, 'END')
-  const startIndex = source.indexOf(startMarker)
-  const endIndex = source.indexOf(endMarker)
+function sourceFileList(sourceFiles: SourceFiles): string[] {
+  return typeof sourceFiles === 'string' ? [sourceFiles] : sourceFiles
+}
 
-  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
-    throw new Error(`Source markers "${startMarker}" and "${endMarker}" were not found in ${sourceFile}`)
+function readCodeBlockFromSources(sourceFiles: SourceFiles, placeholderId: string): string {
+  const startMarker = sourceMarker(placeholderId, 'START')
+  const endMarker = sourceMarker(placeholderId, 'END')
+
+  for (const sourceFile of sourceFileList(sourceFiles)) {
+    const source = readFileSync(sourceFile, 'utf8')
+    const startIndex = source.indexOf(startMarker)
+    const endIndex = source.indexOf(endMarker)
+
+    if (startIndex !== -1 && endIndex > startIndex) {
+      return source.slice(startIndex + startMarker.length, endIndex).trim()
+    }
   }
 
-  return source.slice(startIndex + startMarker.length, endIndex).trim()
+  throw new Error(
+    `Source markers "${startMarker}" and "${endMarker}" were not found in ${sourceFileList(sourceFiles).join(', ')}`
+  )
 }
 
 function replaceKeyToMarkerId(replaceKey: string): string {
@@ -512,20 +509,20 @@ function replaceKeyToMarkerId(replaceKey: string): string {
     .replaceAll('_', '-')
 }
 
-function codePlaceholder(id: string): string {
-  return `${id}_CODE_BLOCK`
+function codePlaceholder(flowPlaceholderId: string): string {
+  return `${flowPlaceholderId}_CODE_BLOCK`
 }
 
-function flowJsonPlaceholder(id: string): string {
-  return `${id}_FLOW_JSON`
+function flowJsonPlaceholder(flowPlaceholderId: string): string {
+  return `${flowPlaceholderId}_FLOW_JSON`
 }
 
-function staticGraphPlaceholder(id: string): string {
-  return `${id}_STATIC_GRAPH`
+function staticGraphPlaceholder(flowPlaceholderId: string): string {
+  return `${flowPlaceholderId}_STATIC_GRAPH`
 }
 
-function flowHtmlPlaceholder(id: string): string {
-  return `${id}_FLOW_HTML`
+function flowHtmlPlaceholder(flowPlaceholderId: string): string {
+  return `${flowPlaceholderId}_FLOW_HTML`
 }
 
 function tocPlaceholder(): string {
@@ -540,55 +537,73 @@ function leafFlowsHtmlPlaceholder(): string {
   return 'LEAF_FLOWS_HTML'
 }
 
-function demoBase(exampleId: string, demoId: string): string {
-  return `${exampleId}_${demoId}`
+function demoBase(flowPlaceholderId: string, demoPlaceholderId: string): string {
+  return `${flowPlaceholderId}_${demoPlaceholderId}`
 }
 
-function demoFullTablePlaceholder(exampleId: string, demoId: string): string {
-  return `${demoBase(exampleId, demoId)}_FULL_TABLE`
+function demoFullTablePlaceholder(flowPlaceholderId: string, demoPlaceholderId: string): string {
+  return `${demoBase(flowPlaceholderId, demoPlaceholderId)}_FULL_TABLE`
 }
 
-function demoInitJsonPlaceholder(exampleId: string, demoId: string): string {
-  return `${demoBase(exampleId, demoId)}_INIT_JSON`
+function demoInitJsonPlaceholder(flowPlaceholderId: string, demoPlaceholderId: string): string {
+  return `${demoBase(flowPlaceholderId, demoPlaceholderId)}_INIT_JSON`
 }
 
-function demoResultJsonPlaceholder(exampleId: string, demoId: string): string {
-  return `${demoBase(exampleId, demoId)}_RESULT_JSON`
+function demoResultJsonPlaceholder(flowPlaceholderId: string, demoPlaceholderId: string): string {
+  return `${demoBase(flowPlaceholderId, demoPlaceholderId)}_RESULT_JSON`
 }
 
-function demoResultMermaidPlaceholder(exampleId: string, demoId: string): string {
-  return `${demoBase(exampleId, demoId)}_RESULT_MERMAID`
+function demoResultMermaidPlaceholder(flowPlaceholderId: string, demoPlaceholderId: string): string {
+  return `${demoBase(flowPlaceholderId, demoPlaceholderId)}_RESULT_MERMAID`
 }
 
-function demoResultHtmlPlaceholder(exampleId: string, demoId: string): string {
-  return `${demoBase(exampleId, demoId)}_RESULT_HTML`
+function demoResultHtmlPlaceholder(flowPlaceholderId: string, demoPlaceholderId: string): string {
+  return `${demoBase(flowPlaceholderId, demoPlaceholderId)}_RESULT_HTML`
 }
 
-function formatFlow(flow: DocumentationFlow<any>): FormattedItem {
+function formatFlow(flow: AnyDocumentationFlow): FormattedItem {
   return {
-    id: flow.id,
-    title: flow.title ?? humanizeId(flow.id),
-    description: flow.description,
+    placeholderId: flow.placeholderId,
+    title: flow.title ?? flow.flow.options?.name ?? humanizeId(flow.placeholderId),
+    description: flow.description ?? flow.flow.options?.description,
   }
 }
 
-function formatDemo(demo: DocumentationDemo<any>): FormattedItem {
+function validateFlowMetadata(flows: readonly AnyDocumentationFlow[]): void {
+  for (const flow of flows) {
+    if (flow.title == null && flow.flow.options?.name == null) {
+      throw new Error(
+        `Documentation flow "${flow.placeholderId}" requires a title because its flow does not have a name`
+      )
+    }
+
+    if (flow.description == null && flow.flow.options?.description == null) {
+      throw new Error(
+        `Documentation flow "${flow.placeholderId}" requires a description because its flow does not have a description`
+      )
+    }
+  }
+}
+
+function formatDemo(demo: AnyDocumentationDemo): FormattedItem {
   return {
-    id: demo.id,
-    title: demo.title ?? humanizeId(demo.id),
+    placeholderId: demo.placeholderId,
+    title: demo.title ?? humanizeId(demo.placeholderId),
     description: demo.description,
   }
 }
 
 function formatStep(
   formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
+  flow: AnyDocumentationFlow,
   step: FlowStepInfo
-): FormattedItem {
-  const formatted = formatter == null ? defaultFormatter(step, flow.id) : formatter(step, flow.id)
+): FormattedStepItem {
+  const formatted = formatter?.(step, flow.placeholderId) ?? {
+    title: step.options?.name ?? step.id ?? '',
+    description: typeof step.options?.description === 'string' ? step.options.description : undefined,
+  }
 
   return {
-    id: step.id ?? '',
     title: formatted.title,
     description: formatted.description,
   }
@@ -602,12 +617,17 @@ function templateIncludes(template: string, placeholderId: string): boolean {
   return template.includes(templatePlaceholderToken(placeholderId))
 }
 
+function replacePlaceholder(template: string, placeholderId: string, render: () => string): string {
+  const token = templatePlaceholderToken(placeholderId)
+  return template.includes(token) ? template.replace(token, render()) : template
+}
+
 function anchorForHeading(text: string): string {
   return slugify(text)
 }
 
-function headingLevelBeforeMarker<TFlows extends readonly AnyDocumentationFlow[]>(
-  pageContent: readonly DocumentationSection<TFlows>[] | undefined,
+function headingLevelBeforeMarker(
+  pageContent: readonly RuntimeDocumentationSection[] | undefined,
   marker: string
 ): number | undefined {
   if (pageContent == null) {
@@ -634,49 +654,32 @@ function childHeadingLevel(parentHeadingLevel: number | undefined): number {
   return parentHeadingLevel == null ? 2 : parentHeadingLevel + 1
 }
 
-function flowAnchorBase(_formatter: DocumentationFormatter | undefined, flow: DocumentationFlow<any>): string {
-  return slugify(formatFlow(flow).id || flow.id)
+function flowAnchorBase(flow: AnyDocumentationFlow): string {
+  return slugify(formatFlow(flow).placeholderId || flow.placeholderId)
 }
 
-function demoAnchorBase(
-  formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
-  demo: DocumentationDemo<any>
-): string {
-  return slugify(`${flowAnchorBase(formatter, flow)}-${formatDemo(demo).id || demo.id}`)
+function demoAnchorBase(flow: AnyDocumentationFlow, demo: AnyDocumentationDemo): string {
+  return slugify(`${flowAnchorBase(flow)}-${formatDemo(demo).placeholderId || demo.placeholderId}`)
 }
 
-function anchorForExamplePart(
-  formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
-  suffix: string
-): string {
-  return `${flowAnchorBase(formatter, flow)}-${suffix}`
+function anchorForExamplePart(flow: AnyDocumentationFlow, suffix: string): string {
+  return `${flowAnchorBase(flow)}-${suffix}`
 }
 
-function anchorForDemoPart(
-  formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
-  demo: DocumentationDemo<any>,
-  suffix: string
-): string {
-  return `${demoAnchorBase(formatter, flow, demo)}-${suffix}`
+function anchorForDemoPart(flow: AnyDocumentationFlow, demo: AnyDocumentationDemo, suffix: string): string {
+  return `${demoAnchorBase(flow, demo)}-${suffix}`
 }
 
-function anchorForFlowSection(formatter: DocumentationFormatter | undefined, flow: DocumentationFlow<any>): string {
-  return `${flowAnchorBase(formatter, flow)}-flow`
+function anchorForFlowSection(flow: AnyDocumentationFlow): string {
+  return `${flowAnchorBase(flow)}-flow`
 }
 
-function firstUsedExampleAnchor(
-  template: string,
-  formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>
-): string | null {
+function firstUsedExampleAnchor(template: string, flow: AnyDocumentationFlow): string | null {
   const candidates: Array<[string, string]> = [
-    [flowHtmlPlaceholder(flow.id), anchorForExamplePart(formatter, flow, 'flow-html')],
-    [codePlaceholder(flow.id), anchorForExamplePart(formatter, flow, 'code-block')],
-    [staticGraphPlaceholder(flow.id), anchorForExamplePart(formatter, flow, 'static-graph')],
-    [flowJsonPlaceholder(flow.id), anchorForExamplePart(formatter, flow, 'flow-json')],
+    [flowHtmlPlaceholder(flow.placeholderId), anchorForExamplePart(flow, 'flow-html')],
+    [codePlaceholder(flow.placeholderId), anchorForExamplePart(flow, 'code-block')],
+    [staticGraphPlaceholder(flow.placeholderId), anchorForExamplePart(flow, 'static-graph')],
+    [flowJsonPlaceholder(flow.placeholderId), anchorForExamplePart(flow, 'flow-json')],
   ]
 
   return candidates.find(([placeholder]) => templateIncludes(template, placeholder))?.[1] ?? null
@@ -684,16 +687,30 @@ function firstUsedExampleAnchor(
 
 function firstUsedDemoAnchor(
   template: string,
-  formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
-  demo: DocumentationDemo<any>
+  flow: AnyDocumentationFlow,
+  demo: AnyDocumentationDemo
 ): string | null {
   const candidates: Array<[string, string]> = [
-    [demoFullTablePlaceholder(flow.id, demo.id), anchorForDemoPart(formatter, flow, demo, 'full-table')],
-    [demoResultHtmlPlaceholder(flow.id, demo.id), anchorForDemoPart(formatter, flow, demo, 'result-html')],
-    [demoResultMermaidPlaceholder(flow.id, demo.id), anchorForDemoPart(formatter, flow, demo, 'result-mermaid')],
-    [demoResultJsonPlaceholder(flow.id, demo.id), anchorForDemoPart(formatter, flow, demo, 'result-json')],
-    [demoInitJsonPlaceholder(flow.id, demo.id), anchorForDemoPart(formatter, flow, demo, 'init-json')],
+    [
+      demoFullTablePlaceholder(flow.placeholderId, demo.placeholderId),
+      anchorForDemoPart(flow, demo, 'full-table'),
+    ],
+    [
+      demoResultHtmlPlaceholder(flow.placeholderId, demo.placeholderId),
+      anchorForDemoPart(flow, demo, 'result-html'),
+    ],
+    [
+      demoResultMermaidPlaceholder(flow.placeholderId, demo.placeholderId),
+      anchorForDemoPart(flow, demo, 'result-mermaid'),
+    ],
+    [
+      demoResultJsonPlaceholder(flow.placeholderId, demo.placeholderId),
+      anchorForDemoPart(flow, demo, 'result-json'),
+    ],
+    [
+      demoInitJsonPlaceholder(flow.placeholderId, demo.placeholderId),
+      anchorForDemoPart(flow, demo, 'init-json'),
+    ],
   ]
 
   return candidates.find(([placeholder]) => templateIncludes(template, placeholder))?.[1] ?? null
@@ -701,7 +718,7 @@ function firstUsedDemoAnchor(
 
 function renderTableStepLabel(
   formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
+  flow: AnyDocumentationFlow,
   step: FlowStepInfo
 ): string {
   const formatted = formatStep(formatter, flow, step)
@@ -718,16 +735,6 @@ function renderTableStepLabel(
   ].join('')
 }
 
-function getOwnEntries<T extends Record<PropertyKey, unknown>>(
-  value: T
-): Array<[Extract<keyof T, PropertyKey>, T[Extract<keyof T, PropertyKey>]]> {
-  return (
-    Reflect.ownKeys(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key)) as Array<
-      Extract<keyof T, PropertyKey>
-    >
-  ).map((key) => [key, value[key]])
-}
-
 function hasBranchFlows(step: FlowStepInfo): step is FlowStepInfo & { branches: Record<PropertyKey, FlowLike> } {
   return step.branches != null
 }
@@ -742,7 +749,7 @@ function getBranchEntries(step: FlowStepInfo): Array<[PropertyKey, FlowLike]> {
 
 function renderStaticBranchColumns(
   formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
+  flow: AnyDocumentationFlow,
   step: FlowStepInfo
 ): string {
   const entries = getBranchEntries(step)
@@ -770,7 +777,7 @@ ${flow.steps.length === 0 ? '' : `<div style="margin-top:8px;">${nestedTable}</d
 
 function renderStaticFlowLayoutRows(
   formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
+  flow: AnyDocumentationFlow,
   steps: readonly FlowStepInfo[]
 ): string {
   return steps
@@ -785,7 +792,7 @@ function renderStaticFlowLayoutRows(
 
 function renderStaticFlowLayoutTable(
   formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
+  flow: AnyDocumentationFlow,
   steps: readonly FlowStepInfo[]
 ): string {
   return [
@@ -800,7 +807,7 @@ function renderStaticFlowHtmlBlock(
   markerId: string,
   anchorId: string,
   formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
+  flow: AnyDocumentationFlow,
   steps: readonly FlowStepInfo[]
 ): string {
   return wrapWithAnchor(
@@ -851,40 +858,40 @@ function renderDemoResultSection(
 
 type LeafFlowEntry = {
   flow: FlowLike
-  referencedBy: DocumentationFlow<any>[]
+  referencedBy: AnyDocumentationFlow[]
 }
 
 function createNestedFlowExample(
   formatter: DocumentationFormatter | undefined,
   flow: FlowLike
-): DocumentationFlow<any> {
+): AnyDocumentationFlow {
   const firstStep = flow.steps[0]
 
   if (firstStep == null) {
     return {
-      id: 'empty-flow',
+      placeholderId: 'empty-flow',
       title: 'Empty flow',
       flow,
     }
   }
 
-  const nestedFlowId = firstStep.id ?? firstStep.options?.name ?? 'branch-flow'
-  const nestedFlow: DocumentationFlow<any> = {
-    id: nestedFlowId,
-    title: nestedFlowId,
+  const nestedFlowPlaceholderId = firstStep.id ?? firstStep.options?.name ?? 'branch-flow'
+  const nestedFlow: AnyDocumentationFlow = {
+    placeholderId: nestedFlowPlaceholderId,
+    title: nestedFlowPlaceholderId,
     flow,
   }
   const formattedStep = formatStep(formatter, nestedFlow, firstStep)
 
   return {
-    id: nestedFlowId,
+    placeholderId: nestedFlowPlaceholderId,
     title: formattedStep.title,
     description: formattedStep.description,
     flow,
   }
 }
 
-function collectNestedFlows(flows: readonly DocumentationFlow<any>[]): LeafFlowEntry[] {
+function collectNestedFlows(flows: readonly AnyDocumentationFlow[]): LeafFlowEntry[] {
   const rootFlows = new Set(flows.map((flow) => flow.flow))
   const nestedFlows = new Map<FlowLike, LeafFlowEntry>()
 
@@ -919,7 +926,7 @@ function collectNestedFlows(flows: readonly DocumentationFlow<any>[]): LeafFlowE
             continue
           }
 
-          if (!existing.referencedBy.some((entry) => entry.id === flow.id)) {
+          if (!existing.referencedBy.some((entry) => entry.placeholderId === flow.placeholderId)) {
             existing.referencedBy.push(flow)
           }
         }
@@ -930,7 +937,7 @@ function collectNestedFlows(flows: readonly DocumentationFlow<any>[]): LeafFlowE
   return [...nestedFlows.values()]
 }
 
-function renderFlowHeading(level: number, formatter: DocumentationFormatter | undefined, flow: DocumentationFlow<any>) {
+function renderFlowHeading(level: number, formatter: DocumentationFormatter | undefined, flow: AnyDocumentationFlow) {
   const formatted = formatFlow(flow)
   const description = formatted.description == null ? '' : `\n\n${formatted.description}`
 
@@ -939,7 +946,7 @@ function renderFlowHeading(level: number, formatter: DocumentationFormatter | un
 
 function renderReferencedByList(
   formatter: DocumentationFormatter | undefined,
-  referencedBy: readonly DocumentationFlow<any>[]
+  referencedBy: readonly AnyDocumentationFlow[]
 ) {
   if (referencedBy.length === 0) {
     return ''
@@ -950,7 +957,7 @@ function renderReferencedByList(
 
 function renderAllFlowsHtmlMermaid(
   formatter: DocumentationFormatter | undefined,
-  flows: readonly DocumentationFlow<any>[],
+  flows: readonly AnyDocumentationFlow[],
   parentHeadingLevel?: number
 ): string {
   const flowHeadingLevel = childHeadingLevel(parentHeadingLevel)
@@ -958,16 +965,16 @@ function renderAllFlowsHtmlMermaid(
   return flows
     .map((flow) => {
       return [
-        wrapWithAnchor(anchorForFlowSection(formatter, flow), renderFlowHeading(flowHeadingLevel, formatter, flow)),
+        wrapWithAnchor(anchorForFlowSection(flow), renderFlowHeading(flowHeadingLevel, formatter, flow)),
         '',
         wrapGeneratedBlock(
-          replaceKeyToMarkerId(flowHtmlPlaceholder(flow.id)),
+          replaceKeyToMarkerId(flowHtmlPlaceholder(flow.placeholderId)),
           'html-table',
           renderStaticFlowLayoutTable(formatter, flow, flow.flow.steps)
         ),
         '',
         renderMermaidBlock(
-          replaceKeyToMarkerId(staticGraphPlaceholder(flow.id)),
+          replaceKeyToMarkerId(staticGraphPlaceholder(flow.placeholderId)),
           renderProcessAsMermaidGraph(flow.flow)
         ),
       ].join('\n')
@@ -977,7 +984,7 @@ function renderAllFlowsHtmlMermaid(
 
 function renderLeafFlowsHtml(
   formatter: DocumentationFormatter | undefined,
-  flows: readonly DocumentationFlow<any>[],
+  flows: readonly AnyDocumentationFlow[],
   parentHeadingLevel?: number
 ): string {
   const leafFlows = collectNestedFlows(flows)
@@ -996,14 +1003,11 @@ function renderLeafFlowsHtml(
       const referencedBy = renderReferencedByList(formatter, leafFlow.referencedBy)
 
       return [
-        wrapWithAnchor(
-          anchorForFlowSection(formatter, leafDoc),
-          renderFlowHeading(leafFlowHeadingLevel, formatter, leafDoc)
-        ),
+        wrapWithAnchor(anchorForFlowSection(leafDoc), renderFlowHeading(leafFlowHeadingLevel, formatter, leafDoc)),
         '',
         referencedBy,
         wrapGeneratedBlock(
-          replaceKeyToMarkerId(flowHtmlPlaceholder(leafDoc.id)),
+          replaceKeyToMarkerId(flowHtmlPlaceholder(leafDoc.placeholderId)),
           'html-table',
           renderStaticFlowLayoutTable(formatter, leafDoc, leafDoc.flow.steps)
         ),
@@ -1017,37 +1021,39 @@ function tocLinesForMarker(
   marker: string,
   template: string,
   formatter: DocumentationFormatter | undefined,
-  flows: readonly DocumentationFlow<any>[]
+  flows: readonly AnyDocumentationFlow[]
 ): string[] {
   if (marker === allFlowsHtmlMermaidPlaceholder()) {
-    return flows.map((flow) => `- [${formatFlow(flow).title}](#${anchorForFlowSection(formatter, flow)})`)
+    return flows.map((flow) => `- [${formatFlow(flow).title}](#${anchorForFlowSection(flow)})`)
   }
 
   if (marker === leafFlowsHtmlPlaceholder()) {
     return collectNestedFlows(flows).map((leafFlow) => {
       const leafDoc = createNestedFlowExample(formatter, leafFlow.flow)
-      return `- [${formatFlow(leafDoc).title}](#${anchorForFlowSection(formatter, leafDoc)})`
+      return `- [${formatFlow(leafDoc).title}](#${anchorForFlowSection(leafDoc)})`
     })
   }
 
-  const flow = flows.find((entry) => entry.id === marker.replace(/_(CODE_BLOCK|FLOW_JSON|STATIC_GRAPH|FLOW_HTML)$/, ''))
+  const flow = flows.find(
+    (entry) => entry.placeholderId === marker.replace(/_(CODE_BLOCK|FLOW_JSON|STATIC_GRAPH|FLOW_HTML)$/, '')
+  )
   if (flow != null) {
-    const flowAnchor = firstUsedExampleAnchor(template, formatter, flow) ?? anchorForFlowSection(formatter, flow)
+    const flowAnchor = firstUsedExampleAnchor(template, flow) ?? anchorForFlowSection(flow)
     return [`- [${formatFlow(flow).title}](#${flowAnchor})`]
   }
 
   for (const flowEntry of flows) {
     for (const demo of flowEntry.demos ?? []) {
       const demoMarkers = [
-        demoFullTablePlaceholder(flowEntry.id, demo.id),
-        demoInitJsonPlaceholder(flowEntry.id, demo.id),
-        demoResultJsonPlaceholder(flowEntry.id, demo.id),
-        demoResultMermaidPlaceholder(flowEntry.id, demo.id),
-        demoResultHtmlPlaceholder(flowEntry.id, demo.id),
+        demoFullTablePlaceholder(flowEntry.placeholderId, demo.placeholderId),
+        demoInitJsonPlaceholder(flowEntry.placeholderId, demo.placeholderId),
+        demoResultJsonPlaceholder(flowEntry.placeholderId, demo.placeholderId),
+        demoResultMermaidPlaceholder(flowEntry.placeholderId, demo.placeholderId),
+        demoResultHtmlPlaceholder(flowEntry.placeholderId, demo.placeholderId),
       ]
 
       if (demoMarkers.includes(marker)) {
-        const demoAnchor = firstUsedDemoAnchor(template, formatter, flowEntry, demo)
+        const demoAnchor = firstUsedDemoAnchor(template, flowEntry, demo)
         if (demoAnchor == null) {
           return []
         }
@@ -1060,11 +1066,11 @@ function tocLinesForMarker(
   return []
 }
 
-function renderStructuredToc<const TFlows extends readonly AnyDocumentationFlow[]>(
+function renderStructuredToc(
   template: string,
   formatter: DocumentationFormatter | undefined,
-  flows: TFlows,
-  pageContent: readonly DocumentationSection<TFlows>[]
+  flows: readonly AnyDocumentationFlow[],
+  pageContent: readonly RuntimeDocumentationSection[]
 ): string {
   const lines: string[] = []
   let currentHeadingLevel = 0
@@ -1094,11 +1100,11 @@ function renderStructuredToc<const TFlows extends readonly AnyDocumentationFlow[
   return lines.join('\n')
 }
 
-function renderToc<const TFlows extends readonly AnyDocumentationFlow[]>(
+function renderToc(
   template: string,
   formatter: DocumentationFormatter | undefined,
-  flows: TFlows,
-  pageContent?: readonly DocumentationSection<TFlows>[]
+  flows: readonly AnyDocumentationFlow[],
+  pageContent?: readonly RuntimeDocumentationSection[]
 ) {
   if (pageContent != null) {
     return renderStructuredToc(template, formatter, flows, pageContent)
@@ -1110,9 +1116,7 @@ function renderToc<const TFlows extends readonly AnyDocumentationFlow[]>(
 
   for (const flow of flows) {
     const flowInfo = formatFlow(flow)
-    const exampleAnchor = rootFlowSectionIncluded
-      ? anchorForFlowSection(formatter, flow)
-      : firstUsedExampleAnchor(template, formatter, flow)
+    const exampleAnchor = rootFlowSectionIncluded ? anchorForFlowSection(flow) : firstUsedExampleAnchor(template, flow)
 
     if (exampleAnchor == null && (flow.demos?.length ?? 0) === 0) {
       continue
@@ -1122,7 +1126,7 @@ function renderToc<const TFlows extends readonly AnyDocumentationFlow[]>(
 
     for (const demo of flow.demos ?? []) {
       const demoInfo = formatDemo(demo)
-      const demoAnchor = firstUsedDemoAnchor(template, formatter, flow, demo)
+      const demoAnchor = firstUsedDemoAnchor(template, flow, demo)
       if (demoAnchor == null) {
         continue
       }
@@ -1135,7 +1139,7 @@ function renderToc<const TFlows extends readonly AnyDocumentationFlow[]>(
     for (const leafFlow of collectNestedFlows(flows)) {
       const leafDoc = createNestedFlowExample(formatter, leafFlow.flow)
       const leafInfo = formatFlow(leafDoc)
-      lines.push(`- [${leafInfo.title}](#${anchorForFlowSection(formatter, leafDoc)})`)
+      lines.push(`- [${leafInfo.title}](#${anchorForFlowSection(leafDoc)})`)
     }
   }
 
@@ -1154,8 +1158,8 @@ function formatUsage(marker: string, used: boolean): string {
 function logMarkerReport(
   template: string,
   templateFile: string,
-  defaultSourceFile: string,
-  flows: readonly DocumentationFlow<any>[]
+  sourceFiles: SourceFiles,
+  flows: readonly AnyDocumentationFlow[]
 ) {
   console.log('GLOBAL:')
   console.log(`- output in ${templateFile}:`)
@@ -1176,29 +1180,29 @@ function logMarkerReport(
   )
 
   for (const flow of flows) {
-    const flowSourceFile = flow.sourceFile ?? defaultSourceFile
+    const flowSourceFiles = sourceFileList(flow.sourceFiles ?? sourceFiles)
     const flowMarkers: MarkerReportEntry[] = [
       {
-        marker: templatePlaceholderToken(codePlaceholder(flow.id)),
-        used: templateIncludes(template, codePlaceholder(flow.id)),
+        marker: templatePlaceholderToken(codePlaceholder(flow.placeholderId)),
+        used: templateIncludes(template, codePlaceholder(flow.placeholderId)),
       },
       {
-        marker: templatePlaceholderToken(flowHtmlPlaceholder(flow.id)),
-        used: templateIncludes(template, flowHtmlPlaceholder(flow.id)),
+        marker: templatePlaceholderToken(flowHtmlPlaceholder(flow.placeholderId)),
+        used: templateIncludes(template, flowHtmlPlaceholder(flow.placeholderId)),
       },
       {
-        marker: templatePlaceholderToken(staticGraphPlaceholder(flow.id)),
-        used: templateIncludes(template, staticGraphPlaceholder(flow.id)),
+        marker: templatePlaceholderToken(staticGraphPlaceholder(flow.placeholderId)),
+        used: templateIncludes(template, staticGraphPlaceholder(flow.placeholderId)),
       },
       {
-        marker: templatePlaceholderToken(flowJsonPlaceholder(flow.id)),
-        used: templateIncludes(template, flowJsonPlaceholder(flow.id)),
+        marker: templatePlaceholderToken(flowJsonPlaceholder(flow.placeholderId)),
+        used: templateIncludes(template, flowJsonPlaceholder(flow.placeholderId)),
       },
     ]
 
-    console.log(`${flow.id}:`)
+    console.log(`${flow.placeholderId}:`)
     console.log(
-      `- source code in ${flowSourceFile}: ${sourceMarker(flow.id, 'START')} / ${sourceMarker(flow.id, 'END')}`
+      `- source code in ${flowSourceFiles.join(', ')}: ${sourceMarker(flow.placeholderId, 'START')} / ${sourceMarker(flow.placeholderId, 'END')}`
     )
     console.log(`- output in ${templateFile}:`)
     console.log('  - flow markers:')
@@ -1207,27 +1211,27 @@ function logMarkerReport(
     }
     console.log('  - demos:')
     for (const demo of flow.demos ?? []) {
-      const demoName = demoBase(flow.id, demo.id)
+      const demoName = demoBase(flow.placeholderId, demo.placeholderId)
       const demoMarkers: MarkerReportEntry[] = [
         {
-          marker: templatePlaceholderToken(demoFullTablePlaceholder(flow.id, demo.id)),
-          used: templateIncludes(template, demoFullTablePlaceholder(flow.id, demo.id)),
+          marker: templatePlaceholderToken(demoFullTablePlaceholder(flow.placeholderId, demo.placeholderId)),
+          used: templateIncludes(template, demoFullTablePlaceholder(flow.placeholderId, demo.placeholderId)),
         },
         {
-          marker: templatePlaceholderToken(demoInitJsonPlaceholder(flow.id, demo.id)),
-          used: templateIncludes(template, demoInitJsonPlaceholder(flow.id, demo.id)),
+          marker: templatePlaceholderToken(demoInitJsonPlaceholder(flow.placeholderId, demo.placeholderId)),
+          used: templateIncludes(template, demoInitJsonPlaceholder(flow.placeholderId, demo.placeholderId)),
         },
         {
-          marker: templatePlaceholderToken(demoResultJsonPlaceholder(flow.id, demo.id)),
-          used: templateIncludes(template, demoResultJsonPlaceholder(flow.id, demo.id)),
+          marker: templatePlaceholderToken(demoResultJsonPlaceholder(flow.placeholderId, demo.placeholderId)),
+          used: templateIncludes(template, demoResultJsonPlaceholder(flow.placeholderId, demo.placeholderId)),
         },
         {
-          marker: templatePlaceholderToken(demoResultMermaidPlaceholder(flow.id, demo.id)),
-          used: templateIncludes(template, demoResultMermaidPlaceholder(flow.id, demo.id)),
+          marker: templatePlaceholderToken(demoResultMermaidPlaceholder(flow.placeholderId, demo.placeholderId)),
+          used: templateIncludes(template, demoResultMermaidPlaceholder(flow.placeholderId, demo.placeholderId)),
         },
         {
-          marker: templatePlaceholderToken(demoResultHtmlPlaceholder(flow.id, demo.id)),
-          used: templateIncludes(template, demoResultHtmlPlaceholder(flow.id, demo.id)),
+          marker: templatePlaceholderToken(demoResultHtmlPlaceholder(flow.placeholderId, demo.placeholderId)),
+          used: templateIncludes(template, demoResultHtmlPlaceholder(flow.placeholderId, demo.placeholderId)),
         },
       ]
 
@@ -1239,72 +1243,62 @@ function logMarkerReport(
   }
 }
 
-async function renderGeneratedExample(
+function renderGeneratedExample(
   markdown: string,
-  sourceFile: string,
+  sourceFiles: SourceFiles,
   formatter: DocumentationFormatter | undefined,
-  flow: DocumentationFlow<any>,
-  demoRenders: readonly DemoRender<any>[]
-): Promise<string> {
+  flow: AnyDocumentationFlow,
+  demoRenders: readonly DemoRender[]
+): string {
   let nextMarkdown = markdown
-  const exampleCode = readCodeBlockFromSource(flow.sourceFile ?? sourceFile, flow.id)
-  const exampleCodeAnchor = anchorForExamplePart(formatter, flow, 'code-block')
-  const exampleFlowHtmlAnchor = anchorForExamplePart(formatter, flow, 'flow-html')
-  const exampleStaticGraphAnchor = anchorForExamplePart(formatter, flow, 'static-graph')
-  const exampleFlowJsonAnchor = anchorForExamplePart(formatter, flow, 'flow-json')
 
-  if (templateIncludes(nextMarkdown, codePlaceholder(flow.id))) {
-    nextMarkdown = nextMarkdown.replace(
-      templatePlaceholderToken(codePlaceholder(flow.id)),
-      wrapWithAnchor(exampleCodeAnchor, ['```ts', escapeMarkdownCodeBlock(exampleCode), '```'].join('\n'))
+  nextMarkdown = replacePlaceholder(nextMarkdown, codePlaceholder(flow.placeholderId), () =>
+    wrapWithAnchor(
+      anchorForExamplePart(flow, 'code-block'),
+      [
+        '```ts',
+        readCodeBlockFromSources(flow.sourceFiles ?? sourceFiles, flow.placeholderId).replaceAll('```', '\\`\\`\\`'),
+        '```',
+      ].join('\n')
     )
-  }
-
-  if (templateIncludes(nextMarkdown, flowJsonPlaceholder(flow.id))) {
-    nextMarkdown = nextMarkdown.replace(
-      templatePlaceholderToken(flowJsonPlaceholder(flow.id)),
-      wrapWithAnchor(
-        exampleFlowJsonAnchor,
-        renderFlowConfigurationJson(replaceKeyToMarkerId(flowJsonPlaceholder(flow.id)), flow.flow)
+  )
+  nextMarkdown = replacePlaceholder(nextMarkdown, flowJsonPlaceholder(flow.placeholderId), () =>
+    wrapWithAnchor(
+      anchorForExamplePart(flow, 'flow-json'),
+      renderJsonCodeBlock(
+        replaceKeyToMarkerId(flowJsonPlaceholder(flow.placeholderId)),
+        serializeForJson(flow.flow)
       )
     )
-  }
-
-  if (templateIncludes(nextMarkdown, staticGraphPlaceholder(flow.id))) {
-    nextMarkdown = nextMarkdown.replace(
-      templatePlaceholderToken(staticGraphPlaceholder(flow.id)),
-      wrapWithAnchor(
-        exampleStaticGraphAnchor,
-        renderTwoColumnHtml(
-          renderMarkdownPane(
-            renderMermaidBlock(
-              replaceKeyToMarkerId(staticGraphPlaceholder(flow.id)),
-              renderProcessAsMermaidGraph(flow.flow)
-            )
-          ),
-          renderStaticFlowLayoutTable(formatter, flow, flow.flow.steps)
-        )
+  )
+  nextMarkdown = replacePlaceholder(nextMarkdown, staticGraphPlaceholder(flow.placeholderId), () =>
+    wrapWithAnchor(
+      anchorForExamplePart(flow, 'static-graph'),
+      renderTwoColumnHtml(
+        renderMarkdownPane(
+          renderMermaidBlock(
+            replaceKeyToMarkerId(staticGraphPlaceholder(flow.placeholderId)),
+            renderProcessAsMermaidGraph(flow.flow)
+          )
+        ),
+        renderStaticFlowLayoutTable(formatter, flow, flow.flow.steps)
       )
     )
-  }
-
-  if (templateIncludes(nextMarkdown, flowHtmlPlaceholder(flow.id))) {
-    nextMarkdown = nextMarkdown.replace(
-      templatePlaceholderToken(flowHtmlPlaceholder(flow.id)),
-      renderStaticFlowHtmlBlock(
-        replaceKeyToMarkerId(flowHtmlPlaceholder(flow.id)),
-        exampleFlowHtmlAnchor,
-        formatter,
-        flow,
-        flow.flow.steps
-      )
+  )
+  nextMarkdown = replacePlaceholder(nextMarkdown, flowHtmlPlaceholder(flow.placeholderId), () =>
+    renderStaticFlowHtmlBlock(
+      replaceKeyToMarkerId(flowHtmlPlaceholder(flow.placeholderId)),
+      anchorForExamplePart(flow, 'flow-html'),
+      formatter,
+      flow,
+      flow.flow.steps
     )
-  }
+  )
 
   for (const rendered of demoRenders) {
-    const markerId = replaceKeyToMarkerId(demoBase(flow.id, rendered.demo.id))
+    const markerId = replaceKeyToMarkerId(demoBase(flow.placeholderId, rendered.demo.placeholderId))
     const runInput =
-      rendered.demo.ctx === undefined ? rendered.demo.init : { data: rendered.demo.init, ctx: rendered.demo.ctx }
+      rendered.demo.ctx === undefined ? rendered.demo.data : { data: rendered.demo.data, ctx: rendered.demo.ctx }
     const parts = renderDemoResultParts(
       markerId,
       runInput,
@@ -1313,11 +1307,12 @@ async function renderGeneratedExample(
       rendered.failedStepResults
     )
 
-    if (templateIncludes(nextMarkdown, demoFullTablePlaceholder(flow.id, rendered.demo.id))) {
-      nextMarkdown = nextMarkdown.replace(
-        templatePlaceholderToken(demoFullTablePlaceholder(flow.id, rendered.demo.id)),
+    nextMarkdown = replacePlaceholder(
+      nextMarkdown,
+      demoFullTablePlaceholder(flow.placeholderId, rendered.demo.placeholderId),
+      () =>
         wrapWithAnchor(
-          anchorForDemoPart(formatter, flow, rendered.demo, 'full-table'),
+          anchorForDemoPart(flow, rendered.demo, 'full-table'),
           renderDemoResultSection(
             markerId,
             runInput,
@@ -1326,62 +1321,53 @@ async function renderGeneratedExample(
             rendered.failedStepResults
           )
         )
-      )
-    }
-
-    if (templateIncludes(nextMarkdown, demoInitJsonPlaceholder(flow.id, rendered.demo.id))) {
-      nextMarkdown = nextMarkdown.replace(
-        templatePlaceholderToken(demoInitJsonPlaceholder(flow.id, rendered.demo.id)),
-        wrapWithAnchor(anchorForDemoPart(formatter, flow, rendered.demo, 'init-json'), parts.initJson)
-      )
-    }
-
-    if (templateIncludes(nextMarkdown, demoResultJsonPlaceholder(flow.id, rendered.demo.id))) {
-      nextMarkdown = nextMarkdown.replace(
-        templatePlaceholderToken(demoResultJsonPlaceholder(flow.id, rendered.demo.id)),
-        wrapWithAnchor(anchorForDemoPart(formatter, flow, rendered.demo, 'result-json'), parts.resultJson)
-      )
-    }
-
-    if (templateIncludes(nextMarkdown, demoResultMermaidPlaceholder(flow.id, rendered.demo.id))) {
-      nextMarkdown = nextMarkdown.replace(
-        templatePlaceholderToken(demoResultMermaidPlaceholder(flow.id, rendered.demo.id)),
-        wrapWithAnchor(anchorForDemoPart(formatter, flow, rendered.demo, 'result-mermaid'), parts.resultMermaid)
-      )
-    }
-
-    if (templateIncludes(nextMarkdown, demoResultHtmlPlaceholder(flow.id, rendered.demo.id))) {
-      nextMarkdown = nextMarkdown.replace(
-        templatePlaceholderToken(demoResultHtmlPlaceholder(flow.id, rendered.demo.id)),
-        wrapWithAnchor(anchorForDemoPart(formatter, flow, rendered.demo, 'result-html'), parts.resultHtml)
-      )
-    }
+    )
+    nextMarkdown = replacePlaceholder(
+      nextMarkdown,
+      demoInitJsonPlaceholder(flow.placeholderId, rendered.demo.placeholderId),
+      () => wrapWithAnchor(anchorForDemoPart(flow, rendered.demo, 'init-json'), parts.initJson)
+    )
+    nextMarkdown = replacePlaceholder(
+      nextMarkdown,
+      demoResultJsonPlaceholder(flow.placeholderId, rendered.demo.placeholderId),
+      () => wrapWithAnchor(anchorForDemoPart(flow, rendered.demo, 'result-json'), parts.resultJson)
+    )
+    nextMarkdown = replacePlaceholder(
+      nextMarkdown,
+      demoResultMermaidPlaceholder(flow.placeholderId, rendered.demo.placeholderId),
+      () => wrapWithAnchor(anchorForDemoPart(flow, rendered.demo, 'result-mermaid'), parts.resultMermaid)
+    )
+    nextMarkdown = replacePlaceholder(
+      nextMarkdown,
+      demoResultHtmlPlaceholder(flow.placeholderId, rendered.demo.placeholderId),
+      () => wrapWithAnchor(anchorForDemoPart(flow, rendered.demo, 'result-html'), parts.resultHtml)
+    )
   }
 
   return nextMarkdown
 }
 
 async function renderAllDemoRenders(
-  flows: readonly DocumentationFlow<any>[]
-): Promise<ReadonlyMap<string, readonly DemoRender<any>[]>> {
+  flows: readonly AnyDocumentationFlow[]
+): Promise<ReadonlyMap<string, readonly DemoRender[]>> {
   return new Map(
     await Promise.all(
       flows.map(async (flow) => {
         const demoRenders = await Promise.all(
           (flow.demos ?? []).map(async (demo) => {
             const result =
-              demo.ctx === undefined ? await flow.flow.run(demo.init) : await flow.flow.run(demo.init, demo.ctx)
+              demo.ctx === undefined ? await flow.flow.run(demo.data) : await flow.flow.run(demo.data, demo.ctx)
             const failedStepResults = flattenStepResults(result.stepResults)
             return {
               demo,
               result,
               convertedResult: convertResultNode(result) as ConvertedFlowResult,
               failedStepResults,
-            } satisfies DemoRender<any>
+            } satisfies DemoRender
           })
         )
 
-        return [flow.id, demoRenders] as const
+        return [flow.placeholderId, demoRenders] as const
       })
     )
   )
@@ -1389,46 +1375,29 @@ async function renderAllDemoRenders(
 
 export async function renderMarkdownDocumentation<const TFlows extends readonly AnyDocumentationFlow[]>({
   template,
-  sourceFile,
+  sourceFiles,
   formatter,
-  flows = [] as unknown as TFlows,
+  flows = [] as unknown as TFlows & TypeCheckedDocumentationFlows<TFlows>,
   pageContent,
 }: RenderMarkdownDocumentationOptions<TFlows>): Promise<string> {
   let markdown = template
-  const demoRendersByExampleId = await renderAllDemoRenders(flows)
+  const demoRendersByFlowPlaceholderId = await renderAllDemoRenders(flows)
 
-  if (templateIncludes(markdown, tocPlaceholder())) {
-    markdown = markdown.replace(
-      templatePlaceholderToken(tocPlaceholder()),
-      renderToc(template, formatter, flows, pageContent)
-    )
-  }
-
-  if (templateIncludes(markdown, allFlowsHtmlMermaidPlaceholder())) {
-    markdown = markdown.replace(
-      templatePlaceholderToken(allFlowsHtmlMermaidPlaceholder()),
-      renderAllFlowsHtmlMermaid(
-        formatter,
-        flows,
-        headingLevelBeforeMarker(pageContent, allFlowsHtmlMermaidPlaceholder())
-      )
-    )
-  }
-
-  if (templateIncludes(markdown, leafFlowsHtmlPlaceholder())) {
-    markdown = markdown.replace(
-      templatePlaceholderToken(leafFlowsHtmlPlaceholder()),
-      renderLeafFlowsHtml(formatter, flows, headingLevelBeforeMarker(pageContent, leafFlowsHtmlPlaceholder()))
-    )
-  }
+  markdown = replacePlaceholder(markdown, tocPlaceholder(), () => renderToc(template, formatter, flows, pageContent))
+  markdown = replacePlaceholder(markdown, allFlowsHtmlMermaidPlaceholder(), () =>
+    renderAllFlowsHtmlMermaid(formatter, flows, headingLevelBeforeMarker(pageContent, allFlowsHtmlMermaidPlaceholder()))
+  )
+  markdown = replacePlaceholder(markdown, leafFlowsHtmlPlaceholder(), () =>
+    renderLeafFlowsHtml(formatter, flows, headingLevelBeforeMarker(pageContent, leafFlowsHtmlPlaceholder()))
+  )
 
   for (const flow of flows) {
-    markdown = await renderGeneratedExample(
+    markdown = renderGeneratedExample(
       markdown,
-      sourceFile,
+      sourceFiles,
       formatter,
       flow,
-      demoRendersByExampleId.get(flow.id) ?? []
+      demoRendersByFlowPlaceholderId.get(flow.placeholderId) ?? []
     )
   }
 
@@ -1451,11 +1420,13 @@ export function p(text: string): ParagraphSection {
 }
 
 export async function writeMarkdownDocumentation<const TFlows extends readonly AnyDocumentationFlow[]>({
-  documentationSourceFile,
+  sourceFiles,
   outputFile,
   printReport = false,
   ...renderOptions
 }: WriteMarkdownDocumentationOptions<TFlows>): Promise<void> {
+  validateFlowMetadata(renderOptions.flows ?? [])
+
   const template =
     'templateFile' in renderOptions && renderOptions.templateFile != null
       ? readFileSync(renderOptions.templateFile, 'utf8')
@@ -1467,7 +1438,7 @@ export async function writeMarkdownDocumentation<const TFlows extends readonly A
       'templateFile' in renderOptions && renderOptions.templateFile != null
         ? renderOptions.templateFile
         : '[pageContent]',
-      documentationSourceFile,
+      sourceFiles,
       renderOptions.flows ?? []
     )
   }
@@ -1476,7 +1447,7 @@ export async function writeMarkdownDocumentation<const TFlows extends readonly A
     outputFile,
     await renderMarkdownDocumentation({
       template,
-      sourceFile: documentationSourceFile,
+      sourceFiles,
       flows: renderOptions.flows,
       formatter: renderOptions.formatter,
       pageContent: 'pageContent' in renderOptions ? renderOptions.pageContent : undefined,

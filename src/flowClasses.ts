@@ -7,7 +7,9 @@ export const stepStatuses = ['ok', 'skip', 'stop', 'fail', 'exception'] as const
 export type StepStatus = (typeof stepStatuses)[number]
 
 export type StepOptionsStatusHandling = {
+  /** Remap `fail` to `ignore` or escalate it to `exception`. */
   fail?: 'ignore' | 'exception'
+  /** Remap `exception` to `fail`. */
   exception?: 'fail'
 }
 
@@ -73,7 +75,7 @@ export type StepResultMapInput<
   RawId = unknown,
   Data extends object = object,
   Ctx = unknown,
-  Result = RawStepFnResult | undefined,
+  Result = RawStepFnResult,
   StateData extends object = Data,
   StateCtx = Ctx,
   StateStepInfo = StepInfoType<RawId>,
@@ -135,8 +137,8 @@ export type StepResultMap<
   RawId = unknown,
   Data extends object = object,
   Ctx = unknown,
-  Result = RawStepFnResult | undefined,
-  MappedResult extends RawStepFnResult | undefined = RawStepFnResult | undefined,
+  Result = RawStepFnResult,
+  MappedResult extends RawStepFnResult = RawStepFnResult,
   StateData extends object = Data,
   StateCtx = Ctx,
   StateStepInfo = StepInfoType<RawId>,
@@ -147,27 +149,47 @@ export type StepResultMap<
 ) => MaybePromiseInMode<Async, MappedResult>
 
 type InitOption<Init> = unknown extends Init
-  ? { init?: Init }
+  ? {
+      /** Maps the current data and context before the step function runs. */
+      init?: Init
+    }
   : [Init] extends [undefined]
-    ? { init?: undefined }
-    : { init: Init }
-
-export type StepParams<Init = unknown, ResultMapper = unknown> = {
-  description?: string
-  status?: StepOptionsStatusHandling
-  trueIsFail?: boolean
-  mapResult?: ResultMapper
-} & InitOption<Init>
+    ? {
+        /** This step does not use an initializer. */
+        init?: undefined
+      }
+    : {
+        /** Maps the current data and context before the step function runs. */
+        init: Init
+      }
 
 export type StepOptions<
   RuleType = unknown,
   Fn extends (...args: any[]) => any = (...args: any[]) => any,
   Init = unknown,
   ResultMapper = unknown,
-> = StepParams<Init, ResultMapper> & {
+> = {
+  /** Rule, rule id, or string id used to identify and resolve the step. */
   rule: RuleType
+  /** Function executed for the step; object-call overloads make this optional when `rule` carries its own function. */
   fn: Fn
-}
+  /** Step description; overrides the description supplied by a rule or resolver. */
+  description?: string
+  /** Status remapping applied after the step result is normalized. */
+  status?: StepOptionsStatusHandling
+  /** Treat boolean `true` as `fail` and `false` as `ok`; overrides the flow default. */
+  trueIsFail?: boolean
+  /**
+   * Maps the raw result after the flow-level `stepDefaults.mapResult`.
+   * Must return a valid raw result; returning `undefined` produces an exception result.
+   */
+  mapResult?: ResultMapper
+} & InitOption<Init>
+
+export type StepParams<Init = unknown, ResultMapper = unknown> = Omit<
+  StepOptions<unknown, (...args: any[]) => any, Init, ResultMapper>,
+  'rule' | 'fn'
+>
 
 export type StepFnResultRuleId = string | { id: string; description?: string }
 
@@ -175,12 +197,22 @@ export type BranchOptions<
   Branches extends Record<PropertyKey, FlowLike> = Record<PropertyKey, FlowLike>,
   Init = (input: BranchInitInput) => MaybePromise<BranchInitResult>,
 > = {
+  /** Child flows keyed by the values that the initializer can select. */
   branches: Branches
+  /**
+   * Selects branch keys and can map their data and context.
+   * When omitted, every branch runs.
+   */
   init?: Init
+  /** Optional id passed through the flow resolver and stored on the branch result. */
   ruleId?: StepFnResultRuleId
+  /** Display name, especially useful for a branch without a `ruleId`. */
   name?: string
+  /** Human-readable description stored with the branch step. */
   description?: string
+  /** Base result path inherited by results produced inside selected branches. */
   path?: string
+  /** Status remapping applied to the branch result. */
   status?: StepOptionsStatusHandling
 }
 
@@ -262,18 +294,33 @@ export type FlowResolver = (
   stepId: string | RuleId<any> | Rule<any, any, any>
 ) => string | RuleId<any> | { id: string; description?: string }
 
-export type FlowStepOptions = {
+type RuntimeFlowMap = InvocationMap<any, any, any, any, any, any, any, any, any, true>
+type RuntimeFlowResultMap = StepResultMap<any, any, any, any, any, any, any, any, any, true>
+
+export type FlowOptionStepDefaults<Mapper = RuntimeFlowMap, ResultMapper = RuntimeFlowResultMap> = {
+  /** Resolves string, `RuleId`, and `Rule` values into an id and optional description. */
   readonly resolver?: FlowResolver
-  readonly map?: InvocationMap<any, any, any, any, any, any, any, any, any, true>
-  readonly mapResult?: StepResultMap<any, any, any, any, any, any, any, any, any, true>
+  /** Maps data and context before every step initializer or branch initializer. */
+  readonly map?: Mapper
+  /**
+   * Maps every raw step result before a step-specific `mapResult`.
+   * Must return a valid raw result; returning `undefined` produces an exception result.
+   */
+  readonly mapResult?: ResultMapper
+  /** Default boolean interpretation for steps: `true` becomes `fail` and `false` becomes `ok`. */
   readonly trueIsFail?: boolean
 }
 
-export type FlowOptions = {
+export type FlowOptions<Mapper = RuntimeFlowMap, ResultMapper = RuntimeFlowResultMap> = {
+  /** Whether the flow runs synchronously; set by `createSyncFlow()` or `createAsyncFlow()`. */
   readonly syncMode: boolean
+  /** Whether `run()` requires a context argument; enabled by `withContext()`. */
   readonly allowContext: boolean
-  readonly stepDefaults: FlowStepOptions
+  /** Defaults and maps applied to every step and branch in the flow. */
+  readonly stepDefaults?: FlowOptionStepDefaults<Mapper, ResultMapper>
+  /** Optional display name for the flow. */
   readonly name?: string
+  /** Optional human-readable description for the flow. */
   readonly description?: string
 }
 

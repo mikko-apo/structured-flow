@@ -247,7 +247,7 @@ function* resolveInvocation(
     data: processingState.data,
     ctx: processingState.ctx,
   }
-  const flowInvocation = yield* applyMap(processingState.flow.options.stepDefaults.map, baseInvocation, 'Flow map')
+  const flowInvocation = yield* applyMap(processingState.flow.options.stepDefaults?.map, baseInvocation, 'Flow map')
 
   return stepInfo instanceof StepInfo
     ? yield* applyMap(
@@ -264,9 +264,16 @@ function* applyResultMap(
   input: RuntimeStepResultMapInput,
   label: string
 ): TravelGenerator<RawStepFnResult | undefined> {
-  return mapResult == null
-    ? input.result
-    : yield* call(() => mapResult(input), `${label} returned a Promise in sync run()`)
+  if (mapResult == null) {
+    return input.result
+  }
+
+  const mappedResult = yield* call(() => mapResult(input), `${label} returned a Promise in sync run()`)
+  if (mappedResult === undefined) {
+    return new StepFnResult('exception', { message: `${label} returned undefined` })
+  }
+
+  return mappedResult
 }
 
 function* createStepResult(
@@ -284,7 +291,7 @@ function* createStepResult(
     result,
   }
   const flowMappedResult = yield* applyResultMap(
-    processingState.flow.options.stepDefaults.mapResult,
+    processingState.flow.options.stepDefaults?.mapResult,
     resultInput,
     'Flow mapResult'
   )
@@ -295,7 +302,7 @@ function* createStepResult(
   )
   const normalized = normalizeStepFnResult(
     stepMappedResult,
-    stepInfo.options?.trueIsFail ?? processingState.flow.options.stepDefaults.trueIsFail
+    stepInfo.options?.trueIsFail ?? processingState.flow.options.stepDefaults?.trueIsFail
   )
   const status = applyStatusHandling(normalized.status, stepInfo.options?.status)
 

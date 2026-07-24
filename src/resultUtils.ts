@@ -53,6 +53,18 @@ export type FlattenStepResultParams = {
 export type FlattenStepResultFn<Item> = (params: FlattenStepResultParams) => Item | undefined
 
 type FlattenedStepMetadata = Pick<FlattenedStepResult, 'id' | 'status' | 'description'>
+type Simplify<Item> = { [Key in keyof Item]: Item[Key] }
+type WithoutUndefinedFields<Item> = Item extends readonly unknown[]
+  ? Item
+  : Item extends object
+    ? Simplify<
+        {
+          [Key in keyof Item as undefined extends Item[Key] ? never : Key]: Item[Key]
+        } & {
+          [Key in keyof Item as undefined extends Item[Key] ? Key : never]?: Exclude<Item[Key], undefined>
+        }
+      >
+    : Item
 
 function metadataFromRuleId(
   ruleId: StepFnResultRuleId | undefined,
@@ -147,18 +159,18 @@ export function flattenStepResults(stepResults: readonly StepResult[]): Flattene
 export function flattenStepResults<FlattenedResult>(
   stepResults: readonly StepResult[],
   fn: FlattenStepResultFn<FlattenedResult>
-): FlattenedResult[]
+): WithoutUndefinedFields<FlattenedResult>[]
 export function flattenStepResults<FlattenedResult>(
   stepResults: readonly StepResult[],
   fn: FlattenStepResultFn<FlattenedResult> = failedStepResult as FlattenStepResultFn<FlattenedResult>
-): FlattenedResult[] {
-  const flattenedResults: FlattenedResult[] = []
+): WithoutUndefinedFields<FlattenedResult>[] {
+  const flattenedResults: WithoutUndefinedFields<FlattenedResult>[] = []
 
   visitResultTree(stepResults, (params) => {
     const item = fn(params)
 
     if (item !== undefined) {
-      flattenedResults.push(item)
+      flattenedResults.push(removeUndefinedFields(item) as WithoutUndefinedFields<FlattenedResult>)
     }
   })
 
@@ -167,6 +179,16 @@ export function flattenStepResults<FlattenedResult>(
 
 function isObjectLike(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function removeUndefinedFields<Item>(item: Item): WithoutUndefinedFields<Item> {
+  if (!isObjectLike(item)) {
+    return item as WithoutUndefinedFields<Item>
+  }
+
+  return Object.fromEntries(
+    Object.entries(item).filter(([, value]) => value !== undefined)
+  ) as WithoutUndefinedFields<Item>
 }
 
 function defaultResultConverter(

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { createSyncFlow, fail, ruleId, rule } from '../index.ts'
 import { writeMarkdownDocumentation } from '../renderMarkdownDocumentation.ts'
 
-const documentationSourceFile = fileURLToPath(import.meta.url)
+const sourceFiles = fileURLToPath(import.meta.url)
 
 type SubmittedForm = {
   id: string
@@ -150,7 +150,7 @@ const householdFlow = createSyncFlow<CoreApiData>()
 /* CORE_API:END */
 
 /* FLOW_METADATA:START */
-const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
+const namedReviewFlow = createSyncFlow<MetadataFlowData>({
   name: 'Named Review Flow',
   description: 'Demonstrates flow-level name and description metadata.',
 }).step({
@@ -163,7 +163,7 @@ const namedReviewFlow = createSyncFlow<string, MetadataFlowData>({
 /* FLOW_METADATA:END */
 
 /* CONTEXT_FLOW:START */
-const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
+const actorAwareFlow = createSyncFlow<ContextFlowData>({
   name: 'Actor-aware Review',
   description: 'Demonstrates withContext() and flow.run(data, ctx).',
 })
@@ -179,7 +179,7 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
 /* CONTEXT_FLOW:END */
 
 /* MAP_FLOW:START */
-const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
+const mappedReviewFlow = createSyncFlow<MapFlowData, MapFlowMapper>({
   name: 'Mapped Review Flow',
   description: 'Demonstrates flow-level map() overrides for callback data and ctx.',
   stepDefaults: {
@@ -247,31 +247,24 @@ export async function writeStructuredProcessExampleMarkdown(
   outputFile = join(dirname(fileURLToPath(import.meta.url)), '../..', 'README.md')
 ) {
   await writeMarkdownDocumentation({
-    documentationSourceFile,
+    sourceFiles,
     templateFile: join(dirname(fileURLToPath(import.meta.url)), 'structuredFlowDemo.readme.template.md'),
     outputFile,
     printReport: true,
-    formatter: (node) => ({
-      title:
-        node.options != null && 'name' in node.options && typeof node.options.name === 'string'
-          ? node.options.name
-          : (node.id ?? ''),
-      description: node.options?.description ?? '',
-    }),
     flows: [
       {
-        id: 'CORE_API',
+        placeholderId: 'CORE_API',
         title: 'Core API',
         description: 'Basic sync flow with reusable rule() helpers and branches.',
         flow: householdFlow,
         demos: [
           {
-            id: 'no_kids',
-            init: { person: { id: 'p1', name: 'Ada', age: 37 }, children: [] },
+            placeholderId: 'no_kids',
+            data: { person: { id: 'p1', name: 'Ada', age: 37 }, children: [] },
           },
           {
-            id: 'two_kids',
-            init: {
+            placeholderId: 'two_kids',
+            data: {
               person: { id: 'p2', name: 'Grace', age: 42 },
               children: [
                 { id: 'c1', name: 'Lin', age: 8 },
@@ -280,57 +273,51 @@ export async function writeStructuredProcessExampleMarkdown(
             },
           },
           {
-            id: 'missing_name',
-            init: { person: { id: 'p3', name: '', age: 29 }, children: [] },
+            placeholderId: 'missing_name',
+            data: { person: { id: 'p3', name: '', age: 29 }, children: [] },
           },
         ],
       },
       {
-        id: 'FLOW_METADATA',
-        title: 'Flow metadata',
-        description: 'Flow configured with a name and description.',
+        placeholderId: 'FLOW_METADATA',
         flow: namedReviewFlow,
         demos: [
           {
-            id: 'ok',
-            init: { form: { id: 'meta-200', occupantCount: 2, requiresManualReview: false } },
+            placeholderId: 'ok',
+            data: { form: { id: 'meta-200', occupantCount: 2, requiresManualReview: false } },
           },
         ],
       },
       {
-        id: 'CONTEXT_FLOW',
-        title: 'Context-aware flow',
-        description: 'Flow using withContext() so flow.run(data, ctx) passes a separate context object.',
+        placeholderId: 'CONTEXT_FLOW',
         flow: actorAwareFlow,
         demos: [
           {
-            id: 'reviewer',
-            init: { form: { id: 'ctx-200', occupantCount: 2, requiresManualReview: false } },
+            placeholderId: 'reviewer',
+            data: { form: { id: 'ctx-200', occupantCount: 2, requiresManualReview: false } },
             ctx: { actorId: 'user-7', role: 'reviewer' },
           },
         ],
       },
       {
-        id: 'MAP_FLOW',
-        title: 'Mapped payload flow',
-        description: 'Flow using flow-level map() to override callback data and ctx.',
+        placeholderId: 'MAP_FLOW',
         flow: mappedReviewFlow,
         demos: [
           {
-            id: 'manual',
-            init: { form: { id: 'map-400', occupantCount: 1, requiresManualReview: true }, checks: ['rules'] },
+            placeholderId: 'manual',
+            data: { form: { id: 'map-400', occupantCount: 1, requiresManualReview: true }, checks: ['rules'] },
           },
         ],
       },
       {
-        id: 'RULE_FLOW',
+        placeholderId: 'RULE_FLOW',
         title: 'Rule helper flow',
         description: 'Flow using ruleId() to keep ids and descriptions together while step functions stay explicit.',
         flow: reviewFlow,
         demos: [
           {
-            id: 'manual',
-            init: {
+            placeholderId: 'manual',
+            data: {
               form: { id: '400', occupantCount: 1, requiresManualReview: true },
               checks: ['audit', 'rules'],
             },

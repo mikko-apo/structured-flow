@@ -17,7 +17,7 @@ import {
   Rule,
   type FlowResult,
   type FlowOptions,
-  type FlowStepOptions,
+  type FlowOptionStepDefaults,
   type FlowResolver,
   type FlowStepInfo,
   type StepOptions,
@@ -29,7 +29,9 @@ import { asyncRun, syncRun } from './flowRun.ts'
 import { getOwnEntries } from './utils.ts'
 
 type AnyFlow = Flow<any, any, any, any, any, any, any, any>
+type AnyNoCtxFlow = Flow<any, any, any, undefined, any, any, any, any>
 type AnyRule = Rule<any, any, any>
+type RuleIdWithoutFn = RuleId<any> & { readonly stepFn?: never }
 type Expand<T> = T extends infer O ? { [K in keyof O]: O[K] } : never
 
 type CompatibleBranchFlow<Data extends object, Ctx> =
@@ -94,7 +96,18 @@ type ResultMapOutput<Mapper, Fallback> = [ExtractFn<Mapper>] extends [never]
   : Awaited<ReturnType<ExtractFn<Mapper>>>
 type MappedData<Mapper, Data extends object, Ctx> = MapOutput<Mapper, Data, Ctx>['data']
 type MappedCtx<Mapper, Data extends object, Ctx> = MapOutput<Mapper, Data, Ctx>['ctx']
-type StepRawResult<Fn> = Awaited<StepOutput<Fn>> | undefined
+type StepRawResult<Fn> = Awaited<StepOutput<Fn>>
+type StepInitializerData<Initializer extends AnyFn> = Parameters<Initializer>[0] extends {
+  data: infer Data extends object
+}
+  ? Data
+  : object
+type BranchInitializerData<Initializer extends AnyFn> = StepInitializerData<Initializer>
+type BranchInitializerResult<Initializer extends AnyFn> = Awaited<ReturnType<Initializer>>
+type BranchInitializerMappedData<Initializer extends AnyFn, Fallback extends object> =
+  BranchInitializerResult<Initializer> extends { data: infer Data extends object } ? Data : Fallback
+type BranchInitializerMappedCtx<Initializer extends AnyFn, Fallback> =
+  BranchInitializerResult<Initializer> extends { ctx: infer Ctx } ? Ctx : Fallback
 type ValidateCallbackInput<Fn, Data extends object, Params extends object> = Fn extends (...args: infer Args) => any
   ? Args extends []
     ? Fn
@@ -106,11 +119,8 @@ type ValidateCallbackInput<Fn, Data extends object, Params extends object> = Fn 
         : Fn
       : never
   : never
-type RuleAllowedInMode<TRule extends AnyRule, SyncMode extends boolean> = SyncMode extends true
-  ? TRule extends Rule<any, true, any>
-    ? never
-    : TRule
-  : TRule
+type RuleAllowedInMode<TRule extends AnyRule, SyncMode extends boolean> =
+  ValidateStepFn<RuleFn<TRule>, SyncMode> extends never ? never : TRule
 
 type ResolvableStepId = Parameters<FlowResolver>[0]
 
@@ -135,13 +145,13 @@ type FlowResultMapFn<
   Data extends object,
   Ctx,
   SyncMode extends boolean,
-  Result = RawStepFnResult | undefined,
+  Result = RawStepFnResult,
 > = StepResultMap<
   StepId,
   Expand<Data>,
   Ctx,
   Result,
-  RawStepFnResult | undefined,
+  RawStepFnResult,
   Data,
   Ctx,
   FlowStateInfo<StepId>,
@@ -196,15 +206,13 @@ type StepOptionResultMap<
   Expand<Data>,
   Ctx,
   Result,
-  RawStepFnResult | undefined,
+  RawStepFnResult,
   RunData,
   RunCtx,
   FlowStateInfo<StepId>,
   FlowState<StepId>,
   AllowAsync<SyncMode>
 >
-
-type UnmappedStepParams<ResultMapper> = StepParams<undefined, ResultMapper>
 
 type StepResultMapper<
   Id,
@@ -239,7 +247,7 @@ type StepResultMapperValidation<
 > = MapperValidationArgs<
   Mapper,
   StepResultMapInput<Id, Data, Ctx, Result, RunData, RunCtx, FlowStateInfo<StepId>>,
-  RawStepFnResult | undefined
+  RawStepFnResult
 >
 
 type FlowBranchInitInput<StepId, Data extends object, Ctx, RunData extends object, RunCtx> = BranchInitInput<
@@ -252,26 +260,15 @@ type FlowBranchInitInput<StepId, Data extends object, Ctx, RunData extends objec
 >
 
 type FlowRunResult<SyncMode extends boolean> = SyncMode extends true ? FlowResult : Promise<FlowResult>
-type CurrentFlow<
-  RunData extends object,
-  StepId,
-  SyncMode extends boolean,
-  RunCtx,
-  StepData extends object,
-  StepCtx,
-  FlowMapper,
-  FlowResultMapper,
-> = Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
-type FlowMetadataOptions = Pick<FlowOptions, 'name' | 'description'>
 type FactoryBranchOptions<
   Branches extends Record<PropertyKey, AnyFlow>,
   Init = undefined,
   FlowConfig = CreateFlowOptions<any, string, boolean>,
-> = {
-  branch: BranchOptions<Branches, Init>
+> = FlowConfig & {
   step?: never
-} & Omit<FlowConfig, 'step' | 'branch'>
-type FactoryFlow<
+  branch: BranchOptions<Branches, Init>
+}
+type FlowNoCtx<
   Data extends object,
   StepId,
   SyncMode extends boolean,
@@ -280,13 +277,6 @@ type FactoryFlow<
   FlowMapper = undefined,
   FlowResultMapper = undefined,
 > = Flow<Data, StepId, SyncMode, undefined, StepData, StepCtx, FlowMapper, FlowResultMapper>
-
-type MappedFlowOptions<Mapper, ResultMapper, MapperType = unknown, ResultMapperType = unknown> = FlowMetadataOptions & {
-  stepDefaults?: Omit<FlowStepOptions, 'map' | 'mapResult'> & {
-    map?: Mapper & MapperType
-    mapResult?: ResultMapper & ResultMapperType
-  }
-}
 
 type CreateFlowOptions<
   Data extends object,
@@ -297,65 +287,74 @@ type CreateFlowOptions<
   ResultMapper extends
     | FlowResultMapFn<StepId, MapOutput<Mapper, Data, Ctx>['data'], MapOutput<Mapper, Data, Ctx>['ctx'], SyncMode>
     | undefined = undefined,
-> = MappedFlowOptions<
-  Mapper,
-  ResultMapper,
-  FlowMapFn<StepId, Data, Ctx, SyncMode>,
-  FlowResultMapFn<StepId, MapOutput<Mapper, Data, Ctx>['data'], MapOutput<Mapper, Data, Ctx>['ctx'], SyncMode>
-> & {
-  step?: never
-  branch?: never
-  branches?: never
-  init?: never
-}
-
-type FactoryStepOptions<RuleType, Fn extends AnyFn, Initializer = undefined, ResultMapper = undefined> = {
-  step: StepOptions<RuleType, Fn, Initializer, ResultMapper>
-  branch?: never
-} & FlowMetadataOptions
-
-type InitialFlowOptions<
-  Data extends object,
-  StepId,
-  Result,
-  SyncMode extends boolean,
-  Mapper extends FlowMapFn<StepId, Data, undefined, SyncMode> | undefined = undefined,
-  ResultMapper extends
-    | FlowResultMapFn<
-        StepId,
-        MapOutput<Mapper, Data, undefined>['data'],
-        MapOutput<Mapper, Data, undefined>['ctx'],
-        SyncMode,
-        Result
-      >
-    | undefined = undefined,
-> = MappedFlowOptions<
-  Mapper,
-  ResultMapper,
-  FlowMapFn<StepId, Data, undefined, SyncMode>,
-  FlowResultMapFn<
-    StepId,
-    MapOutput<Mapper, Data, undefined>['data'],
-    MapOutput<Mapper, Data, undefined>['ctx'],
-    SyncMode,
-    Result
-  >
+> = Omit<
+  FlowOptions<
+    Mapper & FlowMapFn<StepId, Data, Ctx, SyncMode>,
+    ResultMapper &
+      FlowResultMapFn<StepId, MapOutput<Mapper, Data, Ctx>['data'], MapOutput<Mapper, Data, Ctx>['ctx'], SyncMode>
+  >,
+  'syncMode' | 'allowContext'
 >
 
-type CombinedFactoryStepOptions<RuleType, Fn extends AnyFn, FlowConfig, ResultMapper = unknown> = {
-  step: StepOptions<RuleType, Fn, unknown, ResultMapper>
+type InitialFlowResultMapper<Data extends object, SyncMode extends boolean> = FlowResultMapFn<
+  unknown,
+  Data,
+  undefined,
+  SyncMode
+>
+
+type FactoryStepOptions<Step, Data extends object, SyncMode extends boolean> = CreateFlowOptions<
+  Data,
+  unknown,
+  SyncMode,
+  undefined,
+  undefined,
+  InitialFlowResultMapper<Data, SyncMode>
+> & {
+  step: Step
   branch?: never
-} & Omit<FlowConfig, 'step' | 'branch'>
-
-type ValidatedFactoryStep<Fn extends AnyFn, SyncMode extends boolean> = {
-  step: {
-    fn: Fn & ValidateStepFn<NoInfer<Fn>, SyncMode>
-  }
 }
 
-type WithStepDefaults<Options extends { stepDefaults?: unknown }> = Options & {
-  stepDefaults: NonNullable<Options['stepDefaults']>
+type FactoryRuleStepOptions<
+  TRule extends AnyRule,
+  Fn extends AnyFn,
+  Data extends object,
+  SyncMode extends boolean,
+> = Omit<
+  StepOptions<
+    TRule,
+    Fn,
+    undefined,
+    StepOptionResultMap<TRule, Data, undefined, RawStepFnResult, Data, undefined, string, SyncMode>
+  >,
+  'fn'
+> & {
+  fn?: Fn
 }
+
+type FactoryStepValidation<Fn extends AnyFn, SyncMode extends boolean> =
+  ValidateStepFn<Fn, SyncMode> extends never ? [invalidStepFn: never] : []
+
+type FactoryInitializerValidation<InitialId, Initializer extends AnyFn, Data extends object, SyncMode extends boolean> =
+  Initializer extends StepOptionInit<InitialId, Data, undefined, Data, undefined, string, SyncMode>
+    ? []
+    : [invalidInitializer: never]
+
+type FactoryBranchInitializerValidation<
+  Initializer extends AnyFn,
+  Data extends object,
+  SelectedKey extends PropertyKey,
+  SelectedData extends object,
+  SelectedCtx,
+  SyncMode extends boolean,
+> =
+  Initializer extends ModeCallback<
+    SyncMode,
+    FlowBranchInitInput<string, Data, undefined, Data, undefined>,
+    BranchInitResult<SelectedKey, SelectedData, SelectedCtx>
+  >
+    ? []
+    : [invalidInitializer: never]
 
 function resolveOptions(
   resolver: FlowResolver | undefined,
@@ -373,6 +372,18 @@ function resolveOptions(
   }
 }
 
+/**
+ * An immutable flow definition and its accumulated steps.
+ *
+ * @typeParam RunData - Data accepted by `run()`.
+ * @typeParam StepId - Raw step-id type exposed to resolvers, maps, and processing state.
+ * @typeParam SyncMode - Whether `run()` returns a `FlowResult` (`true`) or a promise (`false`).
+ * @typeParam RunCtx - Context accepted by `run()`; `undefined` until `withContext()` is used.
+ * @typeParam StepData - Data passed to steps after the flow-level `stepDefaults.map`.
+ * @typeParam StepCtx - Context passed to steps after the flow-level `stepDefaults.map`.
+ * @typeParam FlowMapper - Flow-level map function retained for validation when context changes.
+ * @typeParam FlowResultMapper - Flow-level result map used to type each step's `mapResult` input.
+ */
 export class Flow<
   RunData extends object = object,
   StepId = string,
@@ -385,6 +396,10 @@ export class Flow<
 > {
   declare private readonly __flowType__: (data: RunData, ctx: RunCtx) => [RunData, RunCtx]
 
+  /**
+   * @param steps - Immutable step and branch definitions accumulated in this flow.
+   * @param options - Runtime mode, context behavior, metadata, and step defaults for the flow.
+   */
   constructor(
     readonly steps: readonly FlowStepInfo[],
     readonly options: FlowOptions
@@ -410,7 +425,7 @@ export class Flow<
 
   private appendStep(
     newStep: FlowStepInfo
-  ): CurrentFlow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper> {
+  ): Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper> {
     return new Flow([...this.steps, newStep], this.options)
   }
 
@@ -434,14 +449,34 @@ export class Flow<
   }
 
   private previewStep(stepId: unknown, options?: StepParams | BranchOptions) {
-    return resolveOptions(this.options.stepDefaults.resolver, stepId as ResolvableStepId, options)
+    return resolveOptions(this.options.stepDefaults?.resolver, stepId as ResolvableStepId, options)
   }
 
+  /**
+   * Adds a step using one of these forms:
+   *
+   * - `step(rule)`
+   * - `step(rule, stepParams)`
+   * - `step({ rule, fn?, ...stepParams })`
+   *
+   * The object form requires `fn` for a `RuleId` or string. For a `Rule`, `fn` is optional and overrides the Rule's
+   * function when supplied.
+   *
+   * Step parameters:
+   *
+   * - `rule`: rule, rule id, or string that identifies the step.
+   * - `fn`: function to run; required for a rule id or string and optional for a `Rule`.
+   * - `init`: maps data and context before `fn`.
+   * - `description`: overrides the description from the rule or resolver.
+   * - `status`: remaps `fail` or `exception` results.
+   * - `trueIsFail`: overrides the flow's boolean-result interpretation.
+   * - `mapResult`: maps the raw result after the flow-level result mapper.
+   */
   step<
     TRule extends AnyRule,
     Fn extends (...args: any[]) => any = TRule extends Rule<infer StepFn, any, any> ? StepFn : never,
   >(
-    rule: RuleAllowedInMode<TRule, SyncMode>,
+    rule: TRule & RuleAllowedInMode<NoInfer<TRule>, SyncMode>,
     options: StepParams<
       StepOptionInit<
         TRule,
@@ -476,7 +511,7 @@ export class Flow<
       RunCtx,
       StepId
     >
-  ): CurrentFlow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
+  ): Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
   step<
     TRule extends AnyRule,
     Fn extends (...args: any[]) => any = TRule extends Rule<infer StepFn, any, any> ? StepFn : never,
@@ -484,9 +519,10 @@ export class Flow<
       | StepResultMapper<TRule, StepData, StepCtx, Fn, FlowResultMapper, RunData, RunCtx, StepId, SyncMode>
       | undefined = undefined,
   >(
-    rule: RuleAllowedInMode<TRule, SyncMode> &
+    rule: TRule &
+      RuleAllowedInMode<NoInfer<TRule>, SyncMode> &
       (ValidateCallbackInput<Fn, StepData, { ctx: StepCtx }> extends never ? never : TRule),
-    options?: UnmappedStepParams<ResultMapper>,
+    options?: StepParams<undefined, ResultMapper>,
     ...validation: StepResultMapperValidation<
       FlowResultMapper,
       TRule,
@@ -497,7 +533,47 @@ export class Flow<
       RunCtx,
       StepId
     >
-  ): CurrentFlow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
+  ): Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
+  step<TRule extends AnyRule>(
+    params: {
+      rule: TRule & RuleAllowedInMode<NoInfer<TRule>, SyncMode>
+      fn?: undefined
+    } & StepParams<
+      StepOptionInit<
+        TRule,
+        StepData,
+        StepCtx,
+        RunData,
+        RunCtx,
+        StepId,
+        SyncMode,
+        RuleData<TRule>,
+        RuleCtx<TRule, StepCtx>
+      >,
+      StepResultMapper<
+        TRule,
+        RuleData<TRule>,
+        RuleCtx<TRule, StepCtx>,
+        RuleFn<TRule>,
+        FlowResultMapper,
+        RunData,
+        RunCtx,
+        StepId,
+        SyncMode
+      >
+    >
+  ): Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
+  step<TRule extends AnyRule>(
+    params: {
+      rule: TRule &
+        RuleAllowedInMode<NoInfer<TRule>, SyncMode> &
+        (ValidateCallbackInput<RuleFn<TRule>, StepData, { ctx: StepCtx }> extends never ? never : TRule)
+      fn?: undefined
+    } & StepParams<
+      undefined,
+      StepResultMapper<TRule, StepData, StepCtx, RuleFn<TRule>, FlowResultMapper, RunData, RunCtx, StepId, SyncMode>
+    >
+  ): Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
   step<
     Id extends StepId | string | RuleId<any> | AnyRule,
     Init extends StepOptionInit<Id, StepData, StepCtx, RunData, RunCtx, StepId, SyncMode>,
@@ -510,14 +586,14 @@ export class Flow<
         Id,
         MappedData<Init, StepData, StepCtx>,
         MappedCtx<Init, StepData, StepCtx>,
-        ResultMapOutput<FlowResultMapper, RawStepFnResult | undefined>,
+        ResultMapOutput<FlowResultMapper, RawStepFnResult>,
         RunData,
         RunCtx,
         StepId,
         SyncMode
       >
     >
-  ): CurrentFlow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
+  ): Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
   step<Id extends StepId | string | RuleId<any> | AnyRule = StepId>(
     params: StepOptions<
       Id,
@@ -527,23 +603,26 @@ export class Flow<
         Id,
         StepData,
         StepCtx,
-        ResultMapOutput<FlowResultMapper, RawStepFnResult | undefined>,
+        ResultMapOutput<FlowResultMapper, RawStepFnResult>,
         RunData,
         RunCtx,
         StepId,
         SyncMode
       >
     >
-  ): CurrentFlow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
+  ): Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
   step(
-    ruleOrOptions: AnyRule | StepOptions<StepId | string | RuleId<any> | AnyRule, AnyFn>,
+    ruleOrOptions: AnyRule | (Omit<StepOptions<StepId | string | RuleId<any> | AnyRule, AnyFn>, 'fn'> & { fn?: AnyFn }),
     params?: StepParams,
     ..._validation: never[]
   ): any {
     const isOptions = !(ruleOrOptions instanceof Rule)
-    const { rule, fn, ...stepParams } = isOptions
-      ? ruleOrOptions
-      : { rule: ruleOrOptions, fn: ruleOrOptions.stepFn, ...(params ?? {}) }
+    const {
+      rule,
+      fn: suppliedFn,
+      ...stepParams
+    } = isOptions ? ruleOrOptions : { rule: ruleOrOptions, fn: ruleOrOptions.stepFn, ...(params ?? {}) }
+    const fn = suppliedFn ?? (rule instanceof Rule ? rule.stepFn : undefined)
     const resolvedOptions = Object.keys(stepParams).length === 0 ? undefined : stepParams
     const preview = this.previewStep(rule, resolvedOptions)
 
@@ -554,6 +633,71 @@ export class Flow<
     return this.appendStep(new StepInfo(preview.id, rule, fn as StepInfo['fn'], preview.options))
   }
 
+  /**
+   * Adds a branch using `branch({ branches, init?, ...branchParams })`.
+   *
+   * Without `init`, every branch runs. With `init`, its result selects branches and can map their data and context.
+   *
+   * Branch parameters:
+   *
+   * - `branches`: child flows keyed by selectable branch values.
+   * - `init`: optionally selects keys and maps data and context for the selected flows.
+   * - `ruleId`: optional resolvable id stored on the branch result.
+   * - `name`: display name, particularly for branches without a `ruleId`.
+   * - `description`: human-readable branch description.
+   * - `path`: base result path inherited by results inside the branches.
+   * - `status`: remaps `fail` or `exception` branch results.
+   *
+   * Run every branch:
+   *
+   * ```ts
+   * flow.branch({
+   *   branches: {
+   *     audit: auditFlow,
+   *     notify: notificationFlow,
+   *   },
+   * })
+   * ```
+   *
+   * Select one branch:
+   *
+   * ```ts
+   * flow.branch({
+   *   branches: {
+   *     approve: approvalFlow,
+   *     reject: rejectionFlow,
+   *   },
+   *   init: ({ data }) => data.route,
+   * })
+   * ```
+   *
+   * Select several branches:
+   *
+   * ```ts
+   * flow.branch({
+   *   branches: {
+   *     audit: auditFlow,
+   *     notify: notificationFlow,
+   *   },
+   *   init: () => ['audit', 'notify'],
+   * })
+   * ```
+   *
+   * Select a branch and map its input:
+   *
+   * ```ts
+   * flow.branch({
+   *   branches: {
+   *     item: itemFlow,
+   *   },
+   *   init: ({ data, ctx }) => ({
+   *     keys: 'item',
+   *     data: data.item,
+   *     ctx,
+   *   }),
+   * })
+   * ```
+   */
   branch<
     SelectedKey extends PropertyKey = PropertyKey,
     SelectedData extends object = RunData,
@@ -572,7 +716,7 @@ export class Flow<
         BranchInitResult<SelectedKey, SelectedData, SelectedCtx>
       >
     >
-  ): CurrentFlow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
+  ): Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
   branch<
     TBranches extends Record<PropertyKey, CompatibleBranchFlow<any, RunCtx>>,
     SelectedData extends object = BranchMapData<TBranches>,
@@ -585,7 +729,7 @@ export class Flow<
         BranchDataSelection<keyof TBranches, SelectedData, RunCtx>
       >
     >
-  ): CurrentFlow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
+  ): Flow<RunData, StepId, SyncMode, RunCtx, StepData, StepCtx, FlowMapper, FlowResultMapper>
   branch(
     params: BranchOptions<
       Record<PropertyKey, CompatibleBranchFlow<RunData, RunCtx>>,
@@ -611,29 +755,6 @@ export class Flow<
 
 export type CreateFlowFactory<SyncMode extends boolean> = {
   <
-    InitialId,
-    Fn extends AnyFn,
-    Data extends object = Extract<StepInputData<Fn>, object>,
-    FlowResultMapper extends FlowResultMapFn<unknown, Data, undefined, SyncMode> = FlowResultMapFn<
-      unknown,
-      Data,
-      undefined,
-      SyncMode
-    >,
-  >(
-    config: FactoryStepOptions<
-      InitialId,
-      Fn,
-      undefined,
-      StepResultMapper<InitialId, Data, undefined, Fn, FlowResultMapper, Data, undefined, string, SyncMode>
-    > & {
-      stepDefaults: Omit<FlowStepOptions, 'map' | 'mapResult'> & {
-        map?: never
-        mapResult: FlowResultMapper & FlowResultMapFn<unknown, Data, undefined, SyncMode>
-      }
-    } & ValidatedFactoryStep<Fn, SyncMode>
-  ): FactoryFlow<Data, string, SyncMode, Data, undefined, undefined, FlowResultMapper>
-  <
     Data extends object = object,
     Mapper extends FlowMapFn<string, Data, undefined, SyncMode> | undefined = undefined,
     ResultMapper extends
@@ -645,8 +766,12 @@ export type CreateFlowFactory<SyncMode extends boolean> = {
         >
       | undefined = undefined,
   >(
-    config?: CreateFlowOptions<Data, string, SyncMode, undefined, Mapper, ResultMapper>
-  ): FactoryFlow<
+    flowOptions?: Omit<CreateFlowOptions<Data, string, SyncMode, undefined, Mapper, ResultMapper>, 'stepDefaults'> & {
+      stepDefaults?: FlowOptionStepDefaults<Mapper, ResultMapper>
+      step?: never
+      branch?: never
+    }
+  ): FlowNoCtx<
     Data,
     string,
     SyncMode,
@@ -655,136 +780,102 @@ export type CreateFlowFactory<SyncMode extends boolean> = {
     Mapper,
     ResultMapper
   >
+  <TRule extends AnyRule, Fn extends AnyFn = RuleFn<TRule>, Data extends object = Extract<StepInputData<Fn>, object>>(
+    stepOptions: FactoryStepOptions<RuleAllowedInMode<TRule, SyncMode>, Data, SyncMode>,
+    ...validation: FactoryStepValidation<Fn, SyncMode>
+  ): FlowNoCtx<Data, string, SyncMode, Data, undefined, undefined, InitialFlowResultMapper<Data, SyncMode>>
+  <TRule extends AnyRule, Fn extends AnyFn = RuleFn<TRule>, Data extends object = Extract<StepInputData<Fn>, object>>(
+    stepOptions: FactoryStepOptions<FactoryRuleStepOptions<TRule, Fn, Data, SyncMode>, Data, SyncMode>,
+    ...validation: FactoryStepValidation<Fn, SyncMode>
+  ): FlowNoCtx<Data, string, SyncMode, Data, undefined, undefined, InitialFlowResultMapper<Data, SyncMode>>
   <
-    StepId,
-    Data extends object,
-    Mapper extends FlowMapFn<StepId, Data, undefined, SyncMode> | undefined = undefined,
-    ResultMapper extends
-      | FlowResultMapFn<
-          StepId,
-          MapOutput<Mapper, Data, undefined>['data'],
-          MapOutput<Mapper, Data, undefined>['ctx'],
-          SyncMode
-        >
-      | undefined = undefined,
+    Fn extends AnyFn,
+    InitialId extends string | RuleIdWithoutFn = string,
+    Data extends object = Extract<StepInputData<Fn>, object>,
   >(
-    config: CreateFlowOptions<Data, StepId, SyncMode, undefined, Mapper, ResultMapper>
-  ): FactoryFlow<
-    Data,
-    StepId,
-    SyncMode,
-    MappedData<Mapper, Data, undefined>,
-    MappedCtx<Mapper, Data, undefined>,
-    Mapper,
-    ResultMapper
-  >
+    stepOptions: FactoryStepOptions<
+      StepOptions<
+        InitialId,
+        Fn,
+        undefined,
+        StepOptionResultMap<InitialId, Data, undefined, RawStepFnResult, Data, undefined, string, SyncMode>
+      >,
+      Data,
+      SyncMode
+    >,
+    ...validation: FactoryStepValidation<Fn, SyncMode>
+  ): FlowNoCtx<Data, string, SyncMode, Data, undefined, undefined, InitialFlowResultMapper<Data, SyncMode>>
   <
-    StepId,
-    Data extends object,
-    Initializer extends StepOptionInit<StepId, Data, undefined, Data, undefined, StepId, SyncMode>,
+    InitialId,
+    Initializer extends AnyFn,
+    Data extends object = StepInitializerData<Initializer>,
     Fn extends (
       data: MappedData<Initializer, Data, undefined>,
       params: { ctx: MappedCtx<Initializer, Data, undefined> }
-    ) => any,
+    ) => any = ModeStepFn<SyncMode, MappedData<Initializer, Data, undefined>, MappedCtx<Initializer, Data, undefined>>,
   >(
-    config: FactoryStepOptions<
-      StepId,
-      Fn,
-      Initializer,
-      StepResultMapper<
-        StepId,
-        MappedData<Initializer, Data, undefined>,
-        MappedCtx<Initializer, Data, undefined>,
+    stepOptions: FactoryStepOptions<
+      StepOptions<
+        InitialId,
         Fn,
-        undefined,
-        Data,
-        undefined,
-        StepId,
-        SyncMode
-      >
-    > &
-      ValidatedFactoryStep<Fn, SyncMode>
-  ): FactoryFlow<Data, StepId, SyncMode>
-  <
-    StepId,
-    Fn extends (...args: any[]) => any = SyncMode extends true
-      ? (data: any, params: { ctx: undefined }) => object
-      : (data: any, params: { ctx: undefined }) => MaybePromise<object>,
-    Data extends object = Extract<StepInputData<Fn>, object>,
-    Mapper extends FlowMapFn<StepId, Data, undefined, SyncMode> | undefined = undefined,
-    ResultMapper extends
-      | FlowResultMapFn<
-          StepId,
-          MapOutput<Mapper, Data, undefined>['data'],
-          MapOutput<Mapper, Data, undefined>['ctx'],
-          SyncMode,
-          StepRawResult<Fn>
+        Initializer,
+        StepOptionResultMap<
+          InitialId,
+          MappedData<Initializer, Data, undefined>,
+          MappedCtx<Initializer, Data, undefined>,
+          RawStepFnResult,
+          Data,
+          undefined,
+          string,
+          SyncMode
         >
-      | undefined = undefined,
-  >(
-    config: CombinedFactoryStepOptions<
-      StepId,
-      Fn,
-      WithStepDefaults<InitialFlowOptions<Data, StepId, StepRawResult<Fn>, SyncMode, Mapper, ResultMapper>>,
-      StepResultMapper<
-        StepId,
-        MappedData<Mapper, Data, undefined>,
-        MappedCtx<Mapper, Data, undefined>,
-        Fn,
-        ResultMapper,
-        Data,
-        undefined,
-        StepId,
-        SyncMode
-      >
-    > &
-      ValidatedFactoryStep<Fn, SyncMode>
-  ): FactoryFlow<
-    Data,
-    StepId,
-    SyncMode,
-    MappedData<Mapper, Data, undefined>,
-    MappedCtx<Mapper, Data, undefined>,
-    Mapper,
-    ResultMapper
-  >
-  <
-    StepId,
-    Fn extends (...args: any[]) => any = SyncMode extends true
-      ? (data: any, params: { ctx: undefined }) => object
-      : (data: any, params: { ctx: undefined }) => MaybePromise<object>,
-    Data extends object = Extract<StepInputData<Fn>, object>,
-  >(
-    config: FactoryStepOptions<
-      StepId,
-      Fn,
-      undefined,
-      StepResultMapper<StepId, Data, undefined, Fn, undefined, Data, undefined, StepId, SyncMode>
-    > &
-      ValidatedFactoryStep<Fn, SyncMode>
-  ): FactoryFlow<Data, StepId, SyncMode>
-  <TBranches extends BranchFlowMap<any, undefined>>(
-    config: FactoryBranchOptions<TBranches, undefined, CreateFlowOptions<any, string, SyncMode>>
-  ): FactoryFlow<any, string, SyncMode>
-  <
-    Data extends object,
-    SelectedKey extends PropertyKey = PropertyKey,
-    SelectedData extends object = Data,
-    SelectedCtx = undefined,
-    TBranches extends BranchFlowMap<SelectedData, SelectedCtx, SelectedKey> = BranchFlowMap<
-      SelectedData,
-      SelectedCtx,
-      SelectedKey
+      >,
+      Data,
+      SyncMode
     >,
-  >(
-    config: FactoryBranchOptions<
-      TBranches,
+    ...validation: [
+      ...FactoryInitializerValidation<InitialId, Initializer, Data, SyncMode>,
+      ...FactoryStepValidation<Fn, SyncMode>,
+    ]
+  ): FlowNoCtx<Data, string, SyncMode, Data, undefined, undefined, InitialFlowResultMapper<Data, SyncMode>>
+  <Data extends object = object>(
+    branchOptions: FactoryBranchOptions<
+      Record<PropertyKey, AnyNoCtxFlow>,
       ModeCallback<
         SyncMode,
         FlowBranchInitInput<string, Data, undefined, Data, undefined>,
-        BranchInitResult<SelectedKey, SelectedData, SelectedCtx>
+        BranchInitResult<PropertyKey, object, unknown>
       >,
       CreateFlowOptions<Data, string, SyncMode>
     >
-  ): FactoryFlow<Data, string, SyncMode>
+  ): FlowNoCtx<Data, string, SyncMode>
+  <
+    Initializer extends AnyFn,
+    Data extends object = BranchInitializerData<Initializer>,
+    SelectedData extends object = BranchInitializerMappedData<Initializer, Data>,
+    SelectedCtx = BranchInitializerMappedCtx<Initializer, undefined>,
+    TBranches extends Record<PropertyKey, CompatibleBranchFlow<SelectedData, SelectedCtx>> = Record<
+      PropertyKey,
+      CompatibleBranchFlow<SelectedData, SelectedCtx>
+    >,
+    SelectedKey extends keyof TBranches = keyof TBranches,
+  >(
+    branchOptions: FactoryBranchOptions<TBranches, Initializer, CreateFlowOptions<Data, string, SyncMode>>,
+    ...validation: FactoryBranchInitializerValidation<
+      Initializer,
+      Data,
+      SelectedKey,
+      SelectedData,
+      SelectedCtx,
+      SyncMode
+    >
+  ): FlowNoCtx<Data, string, SyncMode>
+  <
+    Data extends object = object,
+    SelectedKey extends PropertyKey = PropertyKey,
+    SelectedCtx = undefined,
+    TBranches extends BranchFlowMap<Data, SelectedCtx, SelectedKey> = BranchFlowMap<Data, SelectedCtx, SelectedKey>,
+  >(
+    branchOptions: FactoryBranchOptions<TBranches, undefined, CreateFlowOptions<Data, string, SyncMode>>
+  ): FlowNoCtx<Data, string, SyncMode>
 }
