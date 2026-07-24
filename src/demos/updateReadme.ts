@@ -2,7 +2,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createSyncFlow, error, ruleId, rule } from '../index.ts'
-import { writeMarkdownDocumentation } from './renderMarkdownDocumentation.ts'
+import {writeMarkdownDocumentation} from "../renderMarkdownDocumentation.ts";
 
 const documentationSourceFile = fileURLToPath(import.meta.url)
 

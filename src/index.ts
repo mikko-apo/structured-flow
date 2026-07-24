@@ -18,7 +18,7 @@ export type {
   StepStatus,
 } from './flowClasses.ts'
 
-export { renderProcessAsMermaidGraph } from './mermaidRenderer.ts'
+export { renderProcessAsMermaidGraph } from './renderMermaid.ts'
 
 export { convertResultNode, flattenFailedStepResults } from './resultUtils.ts'
 export type { FlattenedFailedStepResult } from './resultUtils.ts'
