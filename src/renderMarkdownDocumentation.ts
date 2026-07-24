@@ -1371,7 +1371,7 @@ async function renderAllDemoRenders(
           (flow.demos ?? []).map(async (demo) => {
             const result =
               demo.ctx === undefined ? await flow.flow.run(demo.init) : await flow.flow.run(demo.init, demo.ctx)
-            const failedStepResults = flattenStepResults<FlattenedFailedStepResult>(result.stepResults)
+            const failedStepResults = flattenStepResults(result.stepResults)
             return {
               demo,
               result,

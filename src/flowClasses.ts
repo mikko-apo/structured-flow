@@ -14,7 +14,7 @@ export type StepOptionsStatusHandling = {
 export type StepInfoType<RawId = unknown> = {
   id: string
   rawId: RawId
-  options?: StepOptions
+  options?: StepParams
 }
 
 export type BranchInfoType<RawId = unknown> = {
@@ -152,19 +152,19 @@ type InitOption<Init> = unknown extends Init
     ? { init?: undefined }
     : { init: Init }
 
-export type StepOptions<Init = unknown, ResultMapper = unknown> = {
+export type StepParams<Init = unknown, ResultMapper = unknown> = {
   description?: string
   status?: StepOptionsStatusHandling
   trueIsFail?: boolean
   mapResult?: ResultMapper
 } & InitOption<Init>
 
-export type StepParams<
-  RuleType,
-  Fn extends (...args: any[]) => any,
+export type StepOptions<
+  RuleType = unknown,
+  Fn extends (...args: any[]) => any = (...args: any[]) => any,
   Init = unknown,
   ResultMapper = unknown,
-> = StepOptions<Init, ResultMapper> & {
+> = StepParams<Init, ResultMapper> & {
   rule: RuleType
   fn: Fn
 }
@@ -272,7 +272,7 @@ export type FlowStepOptions = {
 export type FlowOptions = {
   readonly syncMode: boolean
   readonly allowContext: boolean
-  readonly step: FlowStepOptions
+  readonly stepDefaults: FlowStepOptions
   readonly name?: string
   readonly description?: string
 }
@@ -293,7 +293,7 @@ export class StepInfo {
     readonly id: string,
     readonly rawId: unknown,
     readonly fn: (data: object, params: object) => MaybePromise<object | boolean>,
-    readonly options?: StepOptions
+    readonly options?: StepParams
   ) {}
 }
 

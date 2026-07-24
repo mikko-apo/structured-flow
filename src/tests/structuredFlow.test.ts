@@ -52,7 +52,7 @@ describe('structuredFlow core execution', () => {
       { description: 'Rule helper description' }
     )
     const flow = createSyncFlow<PersonData>({
-      step: {
+      stepDefaults: {
         resolver: (stepId) =>
           typeof stepId === 'string'
             ? { id: `RES-${stepId}`, description: 'Resolved string id' }
@@ -108,7 +108,7 @@ describe('structuredFlow core execution', () => {
     expect(options).toMatchObject({
       syncMode: true,
       allowContext: false,
-      step: {},
+      stepDefaults: {},
       name: 'Person Review',
       description: 'Checks person review steps',
     })
@@ -119,7 +119,9 @@ describe('structuredFlow core execution', () => {
 
   it('creates a one-step flow directly from a rule', () => {
     const directRule = defineRule('DIRECT-RULE', ({ person }: PersonData) => ({ personId: person.id }))
-    const flow = createSyncFlow(directRule)
+    const flow = createSyncFlow({
+      step: { rule: directRule, fn: directRule.stepFn },
+    })
 
     expect(
       convertResultNode(
@@ -140,14 +142,18 @@ describe('structuredFlow core execution', () => {
       personId: person.id,
     }))
     const chainedRule = defineRule('DIRECT-RULE-CHAINED', ({ route }: PersonData) => ({ route }))
-    const flow = createSyncFlow(directRule, {
+    const flow = createSyncFlow({
       step: {
+        rule: directRule,
+        fn: directRule.stepFn,
         description: 'Initial step',
       },
       name: 'Direct rule flow',
-      mapResult: ({ result }) => {
-        expectTypeOf(result).toEqualTypeOf<RawStepFnResult | undefined>()
-        return result == null || typeof result === 'boolean' ? result : { ...result, mapped: true }
+      stepDefaults: {
+        mapResult: ({ result }) => {
+          expectTypeOf(result).toEqualTypeOf<RawStepFnResult | undefined>()
+          return result == null || typeof result === 'boolean' ? result : { ...result, mapped: true }
+        },
       },
     }).step(chainedRule)
 
@@ -169,10 +175,14 @@ describe('structuredFlow core execution', () => {
     })
   })
 
-  it('splits positional options between the flow and its initial step', () => {
-    const flow = createSyncFlow('POSITIONAL', () => ({ checked: true }), {
+  it('splits factory options between the flow and its initial step', () => {
+    const flow = createSyncFlow({
       name: 'Positional flow',
-      step: { description: 'Initial step' },
+      step: {
+        rule: 'POSITIONAL',
+        fn: () => ({ checked: true }),
+        description: 'Initial step',
+      },
     })
 
     expect(flow.options.name).toBe('Positional flow')
@@ -353,7 +363,7 @@ describe('structuredFlow core execution', () => {
 
     let mappedFlow: unknown
     const flow = createSyncFlow<string, PersonData, FlowMap>({
-      step: {
+      stepDefaults: {
         map: ({ data, processingState }) => {
           mappedFlow = processingState.flow
           return {
@@ -387,10 +397,10 @@ describe('structuredFlow core execution', () => {
     })
     expect(mappedFlow).toBe(flow)
 
-    // @ts-expect-error the retained flow map only accepts the original undefined ctx
-    createSyncFlow<string, PersonData, FlowMap>({ step: { map: flow.options.step.map! } }).withContext<{
-      actorId: string
-    }>()
+    createSyncFlow<string, PersonData, FlowMap>({
+      // @ts-expect-error the retained flow map only accepts the original undefined ctx
+      stepDefaults: { map: flow.options.stepDefaults.map! },
+    }).withContext<{ actorId: string }>()
   })
 
   it('types step init and mapResult in runtime execution order', () => {
@@ -488,7 +498,7 @@ describe('structuredFlow core execution', () => {
     expectTypeOf<ExpectedResultInput>().toExtend<Parameters<FlowResultMap>[0]>()
 
     const flow = createSyncFlow<string, PersonData, undefined, FlowResultMap>({
-      step: {
+      stepDefaults: {
         mapResult: ({ data, result }) => {
           if (result === false) {
             return { status: 'fail', source: `flow:${data.route}` }
@@ -859,7 +869,7 @@ describe('structuredFlow core execution', () => {
 
   it('supports flow-level trueIsFail defaults and direct step overrides', () => {
     const flow = createSyncFlow<PersonData>({
-      step: { trueIsFail: true },
+      stepDefaults: { trueIsFail: true },
     })
       .step({ rule: 'TRUE-FAIL', fn: () => true })
       .step({ rule: 'FALSE-OK', fn: () => false })
@@ -991,7 +1001,7 @@ describe('structuredFlow core execution', () => {
       },
     })
     const flow = createAsyncFlow<string, PersonData, typeof flowMap, typeof flowResultMap>({
-      step: {
+      stepDefaults: {
         map: flowMap,
         mapResult: flowResultMap,
       },
@@ -1046,7 +1056,7 @@ describe('structuredFlow core execution', () => {
     const asyncResultMap = async ({ result }: { result: RawStepFnResult | undefined }) => result
 
     createAsyncFlow<string, PersonData, typeof asyncMap, typeof asyncResultMap>({
-      step: {
+      stepDefaults: {
         map: asyncMap,
         mapResult: asyncResultMap,
       },
@@ -1059,16 +1069,16 @@ describe('structuredFlow core execution', () => {
         mapResult: async ({ result }) => result,
       })
 
-    // @ts-expect-error sync flow maps must return synchronously
     createSyncFlow<PersonData>({
-      step: {
+      stepDefaults: {
+        // @ts-expect-error sync flow maps must return synchronously
         map: async ({ data, ctx }: { data: PersonData; ctx: undefined }) => ({ data, ctx }),
       },
     })
 
-    // @ts-expect-error sync flow result maps must return synchronously
     createSyncFlow<PersonData>({
-      step: {
+      stepDefaults: {
+        // @ts-expect-error sync flow result maps must return synchronously
         mapResult: async ({ result }: { result: RawStepFnResult | undefined }) => result,
       },
     })

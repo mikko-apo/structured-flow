@@ -143,6 +143,11 @@ function failedStepResult({ failed, flattenedResult }: FlattenStepResultParams):
   return failed && flattenedResult.id !== undefined ? { ...flattenedResult, id: flattenedResult.id } : undefined
 }
 
+export function flattenStepResults(stepResults: readonly StepResult[]): FlattenedFailedStepResult[]
+export function flattenStepResults<FlattenedResult>(
+  stepResults: readonly StepResult[],
+  fn: FlattenStepResultFn<FlattenedResult>
+): FlattenedResult[]
 export function flattenStepResults<FlattenedResult>(
   stepResults: readonly StepResult[],
   fn: FlattenStepResultFn<FlattenedResult> = failedStepResult as FlattenStepResultFn<FlattenedResult>

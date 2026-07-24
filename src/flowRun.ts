@@ -247,7 +247,7 @@ function* resolveInvocation(
     data: processingState.data,
     ctx: processingState.ctx,
   }
-  const flowInvocation = yield* applyMap(processingState.flow.options.step.map, baseInvocation, 'Flow map')
+  const flowInvocation = yield* applyMap(processingState.flow.options.stepDefaults.map, baseInvocation, 'Flow map')
 
   return stepInfo instanceof StepInfo
     ? yield* applyMap(
@@ -284,7 +284,7 @@ function* createStepResult(
     result,
   }
   const flowMappedResult = yield* applyResultMap(
-    processingState.flow.options.step.mapResult,
+    processingState.flow.options.stepDefaults.mapResult,
     resultInput,
     'Flow mapResult'
   )
@@ -295,7 +295,7 @@ function* createStepResult(
   )
   const normalized = normalizeStepFnResult(
     stepMappedResult,
-    stepInfo.options?.trueIsFail ?? processingState.flow.options.step.trueIsFail
+    stepInfo.options?.trueIsFail ?? processingState.flow.options.stepDefaults.trueIsFail
   )
   const status = applyStatusHandling(normalized.status, stepInfo.options?.status)
 

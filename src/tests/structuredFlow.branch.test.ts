@@ -39,7 +39,7 @@ describe('Flow.branch', () => {
     })
 
     const flow = createSyncFlow<ReviewData>({
-      step: {
+      stepDefaults: {
         resolver: (stepId) =>
           typeof stepId === 'string'
             ? { id: `RES-${stepId}`, description: `Resolved ${stepId}` }

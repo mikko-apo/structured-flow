@@ -1,6 +1,6 @@
-import { expect, it } from 'vitest'
+import { expect, expectTypeOf, it } from 'vitest'
 
-import { convertResultNode, createSyncFlow, rule } from '../index.ts'
+import { convertResultNode, createSyncFlow, flattenStepResults, rule } from '../index.ts'
 
 it('maps parent data into a reusable validation flow', () => {
   type ItemData = {
@@ -22,16 +22,20 @@ it('maps parent data into a reusable validation flow', () => {
     info: 'validation',
   })
   const resultMapCalls: string[] = []
-  const itemValidations = createSyncFlow(requiredRule, {
+  const itemValidations = createSyncFlow({
     step: {
+      rule: requiredRule,
+      fn: requiredRule.stepFn,
       mapResult: ({ result }) => {
         resultMapCalls.push('step')
         return result
       },
     },
-    mapResult: ({ result }) => {
-      resultMapCalls.push('flow')
-      return typeof result === 'boolean' ? !result : result
+    stepDefaults: {
+      mapResult: ({ result }) => {
+        resultMapCalls.push('flow')
+        return typeof result === 'boolean' ? !result : result
+      },
     },
   })
     .step(stateRule)
@@ -47,6 +51,7 @@ it('maps parent data into a reusable validation flow', () => {
     branches: {
       item: itemValidations,
     },
+    path: 'pow',
   })
 
   const result = validationFlow.run({
@@ -77,4 +82,29 @@ it('maps parent data into a reusable validation flow', () => {
       },
     ],
   })
+  const issues = flattenStepResults(result.stepResults).map(({ id, path, message, variables }) => ({
+    code: id,
+    path,
+    message,
+    variables,
+    level: 'error' as const,
+  }))
+  expectTypeOf(issues).toEqualTypeOf<
+    Array<{
+      code: string
+      path: string | undefined
+      message: string | undefined
+      variables: Record<string, unknown>
+      level: 'error'
+    }>
+  >()
+  expect(issues).toEqual([
+    {
+      code: 'RULE-2',
+      path: 'pow',
+      message: undefined,
+      variables: {},
+      level: 'error',
+    },
+  ])
 })

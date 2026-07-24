@@ -2,7 +2,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { createSyncFlow, fail, ruleId, rule } from '../index.ts'
-import {writeMarkdownDocumentation} from "../renderMarkdownDocumentation.ts";
+import { writeMarkdownDocumentation } from '../renderMarkdownDocumentation.ts'
 
 const documentationSourceFile = fileURLToPath(import.meta.url)
 
@@ -182,7 +182,7 @@ const actorAwareFlow = createSyncFlow<string, ContextFlowData>({
 const mappedReviewFlow = createSyncFlow<string, MapFlowData, MapFlowMapper>({
   name: 'Mapped Review Flow',
   description: 'Demonstrates flow-level map() overrides for callback data and ctx.',
-  step: {
+  stepDefaults: {
     map: ({ data }) => ({
       data: {
         submissionId: data.form.id,
